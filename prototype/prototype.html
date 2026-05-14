@@ -1,0 +1,1186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Whisper Wall — Line Prototype</title>
+<style>
+  :root {
+    --paper: #f4ede0;
+    --paper-warm: #ebe1cd;
+    --ink: #1a1612;
+    --ink-soft: rgba(26, 22, 18, 0.55);
+    --ink-faint: rgba(26, 22, 18, 0.28);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+    overflow: hidden;
+  }
+
+  body {
+    background-image:
+      radial-gradient(ellipse at 30% 20%, rgba(180, 150, 100, 0.05), transparent 60%),
+      radial-gradient(ellipse at 70% 80%, rgba(120, 90, 50, 0.04), transparent 55%);
+    position: relative;
+  }
+
+  /* subtle grain */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.1, 0 0 0 0 0.08, 0 0 0 0 0.06, 0 0 0 0.10 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    opacity: 0.5;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  #stage {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+  }
+
+  #canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .ui {
+    position: absolute;
+    z-index: 3;
+    user-select: none;
+    pointer-events: none;
+  }
+
+  .title {
+    top: 2.5rem;
+    left: 3rem;
+    font-size: 0.78rem;
+    letter-spacing: 0.35em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    font-weight: 400;
+  }
+
+  .meta {
+    top: 2.5rem;
+    right: 3rem;
+    font-size: 0.78rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    text-align: right;
+  }
+
+  .hint {
+    bottom: 3rem;
+    left: 50%;
+    transform: translateX(-50%);
+    font-style: italic;
+    font-size: 1.05rem;
+    color: var(--ink-soft);
+    text-align: center;
+    transition: opacity 0.6s ease;
+  }
+
+  .hint.hidden { opacity: 0; }
+
+  .hint kbd {
+    font-family: inherit;
+    font-style: normal;
+    border-bottom: 1px solid var(--ink-faint);
+    padding: 0 0.25em;
+  }
+
+  .status {
+    bottom: 1.25rem;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.7rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    transition: opacity 0.3s ease;
+  }
+
+  .debug {
+    position: absolute;
+    bottom: 1.25rem;
+    right: 1.5rem;
+    z-index: 3;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.65rem;
+    color: var(--ink-faint);
+    line-height: 1.5;
+    text-align: right;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .scope {
+    position: absolute;
+    top: 6rem;
+    right: 1.5rem;
+    z-index: 3;
+    width: 220px;
+    height: 60px;
+    border: 1px solid var(--ink-faint);
+    background: rgba(255, 255, 255, 0.2);
+    pointer-events: none;
+  }
+  .scope-label {
+    position: absolute;
+    top: 5.3rem;
+    right: 1.5rem;
+    z-index: 3;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.55rem;
+    color: var(--ink-faint);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .toggle {
+    position: absolute;
+    top: 2.5rem;
+    right: 50%;
+    transform: translateX(50%);
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    cursor: pointer;
+    user-select: none;
+    pointer-events: auto;
+    transition: color 0.3s ease;
+  }
+  .toggle:hover { color: var(--ink-soft); }
+  .toggle-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 1px solid var(--ink-faint);
+    transition: background 0.3s ease, border-color 0.3s ease;
+  }
+  .toggle.on .toggle-dot {
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+
+  .reject {
+    position: absolute;
+    bottom: 6rem;
+    left: 50%;
+    transform: translateX(-50%);
+    font-style: italic;
+    color: var(--ink-soft);
+    font-size: 0.95rem;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  .reject.show { opacity: 1; }
+
+  /* permission gate */
+  .gate {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--paper);
+    transition: opacity 0.8s ease;
+  }
+  .gate.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .gate-inner {
+    text-align: center;
+    max-width: 32rem;
+    padding: 2rem;
+  }
+  .gate h1 {
+    font-size: 0.85rem;
+    letter-spacing: 0.4em;
+    text-transform: uppercase;
+    font-weight: 400;
+    color: var(--ink-soft);
+    margin-bottom: 2rem;
+  }
+  .gate p {
+    font-style: italic;
+    font-size: 1.15rem;
+    line-height: 1.6;
+    color: var(--ink);
+    margin-bottom: 2.5rem;
+  }
+  .gate button {
+    background: none;
+    border: 1px solid var(--ink-soft);
+    color: var(--ink);
+    font-family: inherit;
+    font-size: 0.75rem;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    padding: 0.9rem 2.2rem;
+    cursor: pointer;
+    transition: background 0.3s ease, color 0.3s ease;
+  }
+  .gate button:hover {
+    background: var(--ink);
+    color: var(--paper);
+  }
+</style>
+</head>
+<body>
+
+<div class="gate" id="gate">
+  <div class="gate-inner">
+    <h1>Whisper Wall · Prototype</h1>
+    <p>This is a single-line study. Microphone access is requested to listen for your voice. Nothing is recorded or sent anywhere.</p>
+    <button id="enterBtn">Enter</button>
+  </div>
+</div>
+
+<div id="stage">
+  <canvas id="canvas"></canvas>
+</div>
+
+<div class="ui title">Whisper Wall</div>
+<div class="ui meta">Line Prototype · v0.1</div>
+
+<div class="toggle" id="toggle">
+  <span>Ornaments</span>
+  <span class="toggle-dot"></span>
+</div>
+
+<div class="ui hint" id="hint">
+  Hold <kbd>space</kbd> and speak.
+</div>
+
+<div class="ui status" id="status">ready</div>
+<div class="scope-label">Waveform</div>
+<canvas class="scope" id="scope" width="440" height="120"></canvas>
+<div class="debug" id="debug">rms&nbsp;·&nbsp;—<br>amb&nbsp;·&nbsp;—<br>pitch·&nbsp;—<br>voice·&nbsp;—<br>mic&nbsp;·&nbsp;—</div>
+
+<script>
+// ---------- Canvas setup with supersampling ----------
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d", { alpha: true });
+let dpr = Math.max(2, window.devicePixelRatio || 1);
+
+function resize() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  canvas.width = Math.floor(w * dpr);
+  canvas.height = Math.floor(h * dpr);
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", resize);
+resize();
+
+// ---------- DOM ----------
+const hint = document.getElementById("hint");
+const status = document.getElementById("status");
+const gate = document.getElementById("gate");
+const enterBtn = document.getElementById("enterBtn");
+const debug = document.getElementById("debug");
+const scopeCanvas = document.getElementById("scope");
+const scopeCtx = scopeCanvas.getContext("2d");
+
+// ---------- Audio ----------
+let audioCtx = null;
+let analyser = null;
+let micStream = null;
+let micSource = null;
+
+const FFT_SIZE = 2048;
+
+let selectedMicLabel = "unknown";
+let micGainNode = null;
+
+async function initAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: true,
+    },
+  });
+  const tracks = micStream.getAudioTracks();
+  if (tracks.length > 0) {
+    selectedMicLabel = tracks[0].label || "unknown";
+  }
+  micSource = audioCtx.createMediaStreamSource(micStream);
+
+  // Explicit gain stage. Many MacBook mics come in at very low levels
+  // through getUserMedia and AGC alone isn't enough. We boost by 15x
+  // before the analyser sees the signal.
+  micGainNode = audioCtx.createGain();
+  micGainNode.gain.value = 15;
+
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = FFT_SIZE;
+  analyser.smoothingTimeConstant = 0.25;
+
+  micSource.connect(micGainNode);
+  micGainNode.connect(analyser);
+}
+
+const freqData = new Uint8Array(FFT_SIZE / 2);
+const timeData = new Uint8Array(FFT_SIZE);
+
+// Compute RMS amplitude (0..1) from time-domain data
+function getRMS() {
+  analyser.getByteTimeDomainData(timeData);
+  let sum = 0;
+  for (let i = 0; i < timeData.length; i++) {
+    const v = (timeData[i] - 128) / 128;
+    sum += v * v;
+  }
+  return Math.sqrt(sum / timeData.length);
+}
+
+// Compute spectral features. Returns { centroid (0..1), lowEnergy, highEnergy, total }
+// Whisper has high centroid relative to amplitude, with little low-frequency energy.
+function getSpectralFeatures() {
+  analyser.getByteFrequencyData(freqData);
+  const sampleRate = audioCtx.sampleRate;
+  const binCount = freqData.length;
+  const nyquist = sampleRate / 2;
+  const hzPerBin = nyquist / binCount;
+
+  let total = 0;
+  let weighted = 0;
+  let lowEnergy = 0;   // 80 - 400 Hz (voiced fundamentals)
+  let midEnergy = 0;   // 400 - 2000 Hz
+  let highEnergy = 0;  // 2000 - 8000 Hz (whisper's main band)
+
+  for (let i = 0; i < binCount; i++) {
+    const hz = i * hzPerBin;
+    const v = freqData[i] / 255;
+    total += v;
+    weighted += v * hz;
+    if (hz >= 80 && hz <= 400) lowEnergy += v;
+    else if (hz > 400 && hz <= 2000) midEnergy += v;
+    else if (hz > 2000 && hz <= 8000) highEnergy += v;
+  }
+
+  const centroidHz = total > 0 ? weighted / total : 0;
+  // Map centroid roughly: 500Hz -> 0, 4000Hz -> 1
+  const centroidNorm = Math.max(0, Math.min(1, (centroidHz - 500) / 3500));
+  return { centroidNorm, lowEnergy, midEnergy, highEnergy, total };
+}
+
+// Autocorrelation-based pitch detection. Returns fundamental frequency in Hz,
+// or 0 if no clear pitch (unvoiced speech, silence, noise).
+const pitchBuffer = new Float32Array(FFT_SIZE);
+function detectPitch() {
+  analyser.getFloatTimeDomainData(pitchBuffer);
+  const sampleRate = audioCtx.sampleRate;
+  const SIZE = pitchBuffer.length;
+
+  // Compute signal energy for normalization
+  let energy = 0;
+  for (let i = 0; i < SIZE; i++) energy += pitchBuffer[i] * pitchBuffer[i];
+  if (energy < 0.01) return 0;  // not enough signal
+
+  // Autocorrelation: find the lag that maximizes self-similarity.
+  // Search range: roughly 70Hz (deep voice) to 500Hz (high voice).
+  const minLag = Math.floor(sampleRate / 500);
+  const maxLag = Math.min(SIZE - 1, Math.floor(sampleRate / 70));
+
+  let bestLag = -1;
+  let bestCorr = 0;
+  for (let lag = minLag; lag < maxLag; lag++) {
+    let corr = 0;
+    for (let i = 0; i < SIZE - lag; i++) {
+      corr += pitchBuffer[i] * pitchBuffer[i + lag];
+    }
+    if (corr > bestCorr) {
+      bestCorr = corr;
+      bestLag = lag;
+    }
+  }
+  if (bestLag === -1) return 0;
+
+  // Normalize correlation by signal energy. A clear pitch produces correlation
+  // close to energy (the signal correlates with a shifted copy of itself).
+  // A noisy/aperiodic signal produces much lower correlation.
+  const normalizedCorr = bestCorr / energy;
+  if (normalizedCorr < 0.4) return 0;
+
+  return sampleRate / bestLag;
+}
+
+// Map a frequency in Hz to a normalized 0..1 value across human voice range.
+// 80Hz (very low voice) → 0, 400Hz (high voice) → 1
+function normalizePitch(hz) {
+  if (hz <= 0) return 0.5;
+  return Math.max(0, Math.min(1, (Math.log2(hz) - Math.log2(80)) / (Math.log2(400) - Math.log2(80))));
+}
+
+// Draw live waveform to the scope canvas. Helps diagnose whether the mic
+// is actually receiving signal at all.
+const scopeBuffer = new Float32Array(FFT_SIZE);
+function drawScope() {
+  if (!analyser) return;
+  analyser.getFloatTimeDomainData(scopeBuffer);
+  const w = scopeCanvas.width;
+  const h = scopeCanvas.height;
+  scopeCtx.clearRect(0, 0, w, h);
+
+  // Center line
+  scopeCtx.strokeStyle = "rgba(26, 22, 18, 0.15)";
+  scopeCtx.lineWidth = 1;
+  scopeCtx.beginPath();
+  scopeCtx.moveTo(0, h / 2);
+  scopeCtx.lineTo(w, h / 2);
+  scopeCtx.stroke();
+
+  // Waveform with light visual amplification (signal is already boosted upstream)
+  scopeCtx.strokeStyle = "rgba(26, 22, 18, 0.9)";
+  scopeCtx.lineWidth = 1.2;
+  scopeCtx.beginPath();
+  const step = scopeBuffer.length / w;
+  const gain = 1.5;
+  for (let x = 0; x < w; x++) {
+    const sample = scopeBuffer[Math.floor(x * step)] * gain;
+    const y = h / 2 + sample * (h / 2);
+    if (x === 0) scopeCtx.moveTo(x, y);
+    else scopeCtx.lineTo(x, y);
+  }
+  scopeCtx.stroke();
+}
+
+// ---------- Stroke state ----------
+// The HAND is sampled from the voice at the start of a stroke and stays
+// fixed for the duration. The same voice produces a similar hand each time;
+// different voices produce different hands. The hand sets the rules of
+// writing (slant, scale, baseline, rhythm); the voice plays within those rules.
+let hand = {
+  slant: 0,            // radians, the global tilt of writing (italics, etc.)
+  baselineY: 0,        // y-coordinate where writing rests
+  xHeight: 30,         // characteristic vertical scale for letter forms
+  tremorFreq: 0.15,    // how fast the micro-tremor oscillates
+  tremorPhase: 0,      // running phase of the tremor
+  loopBias: 0,         // -1..1, whether loops tend to curl up or down
+  forwardSpeed: 1.2,   // base horizontal forward speed
+};
+
+// The pen sits within the hand's frame. Position is *relative to baseline*
+// for the vertical component, and absolute for the horizontal. The hand
+// transforms this into screen space.
+let pen = {
+  x: 0,
+  yLocal: 0,           // distance above (negative) or below (positive) baseline
+  pressure: 0.4,
+  down: true,
+  quietFrames: 0,
+  voiceFrames: 0,
+};
+
+let isDrawing = false;
+let strokePoints = [];
+let pitchHistory = [];
+let rmsHistory = [];
+let centroidHistory = [];
+let centroidVariance = 0;
+let ornamentsEnabled = false;
+let rafId = null;
+let lineStartTime = 0;
+
+// Hand calibration: collect voice qualities during HAND_CAL_MS then commit
+let handSamples = [];
+let handCalibrated = false;
+const HAND_CAL_MS = 350;
+
+// Vowel/consonant rolling state
+let inVowel = false;
+let vowelFrames = 0;
+let lastAmpPeakAt = -10000;
+let downstrokeProgress = -1;  // -1 = not in a downstroke; 0..1 = progress
+let downstrokeStartY = 0;
+let downstrokeTargetDepth = 0;
+
+// Word boundary detection
+let belowVoiceFrames = 0;
+let lastLiftAt = -10000;
+
+// Onset detection: amplitude derivative spikes mark syllable starts.
+// Each onset opens a "letter zone" — a window in which the pen does
+// vertical writing motion. Between zones, the pen connects horizontally.
+let prevAvgRMS = 0;
+let inLetterZone = false;
+let letterZoneStart = 0;
+let letterZoneStartX = 0;
+let nextStrokeDirection = 1;
+let lastOnsetAt = -10000;
+
+// Per-zone gesture parameters (chosen at each onset)
+let zoneHasHook = false;
+let zoneHasLoop = false;
+let zoneHasOvershoot = false;
+let zoneDepthScale = 1;
+let zoneDuration = 180;     // can vary per zone now
+
+const MIN_ONSET_GAP_MS = 200;    // raised from 130 — fewer, more committed gestures
+
+// Flourish tracking — rare surprising marks at exceptional moments
+let sustainedIntenseFrames = 0;
+let highPitchHeldFrames = 0;
+let lastFlourishAt = -10000;
+
+let ambientRMS = 0.003;
+
+const WARMUP_MS = 350;
+const PITCH_SMOOTHING = 8;
+const RMS_SMOOTHING = 6;
+const CENTROID_SMOOTHING = 12;
+const FRAMES_TO_LIFT = 4;
+const FRAMES_TO_DROP = 2;
+const ABUSE_RATIO = 15;
+
+const MIN_WIDTH = 1.2;
+const MAX_WIDTH = 8;
+
+function beginStroke() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  pen.x = w * 0.06;
+  pen.yLocal = 0;
+  pen.pressure = 0.35;
+  pen.down = false;           // start with pen LIFTED, voice will land it
+  pen.quietFrames = 0;
+  pen.voiceFrames = 0;
+  hand.baselineY = h * 0.5;
+  // Defaults — will be overridden by calibration
+  hand.slant = 0;
+  hand.xHeight = 28;
+  hand.tremorFreq = 0.15;
+  hand.tremorPhase = 0;
+  hand.loopBias = 0;
+  hand.forwardSpeed = 1.0;
+  strokePoints = [];
+  pitchHistory = [];
+  rmsHistory = [];
+  centroidHistory = [];
+  handSamples = [];
+  handCalibrated = false;
+  centroidVariance = 0;
+  inVowel = false;
+  vowelFrames = 0;
+  lastAmpPeakAt = -10000;
+  downstrokeProgress = -1;
+  belowVoiceFrames = 0;
+  lastLiftAt = -10000;
+  prevAvgRMS = 0;
+  inLetterZone = false;
+  letterZoneStart = 0;
+  letterZoneStartX = 0;
+  nextStrokeDirection = 1;
+  lastOnsetAt = -10000;
+  zoneHasHook = false;
+  zoneHasLoop = false;
+  zoneHasOvershoot = false;
+  zoneDepthScale = 1;
+  zoneDuration = 180;
+  sustainedIntenseFrames = 0;
+  highPitchHeldFrames = 0;
+  lastFlourishAt = -10000;
+  lineStartTime = performance.now();
+  isDrawing = true;
+  status.textContent = "listening";
+}
+
+// Calibrate the hand from collected voice samples.
+// Maps voice qualities to writing qualities deterministically — same voice
+// produces same hand, different voices produce different hands.
+function calibrateHand() {
+  if (handSamples.length < 5) {
+    // Not enough samples, keep defaults
+    handCalibrated = true;
+    return;
+  }
+  let avgPitch = 0, avgRMS = 0, avgCentroid = 0;
+  let pitchVar = 0;
+  let pitchCount = 0;
+  for (const s of handSamples) {
+    avgRMS += s.rms;
+    avgCentroid += s.centroid;
+    if (s.pitch > 0) {
+      avgPitch += s.pitch;
+      pitchCount++;
+    }
+  }
+  avgRMS /= handSamples.length;
+  avgCentroid /= handSamples.length;
+  if (pitchCount > 0) avgPitch /= pitchCount;
+  for (const s of handSamples) {
+    if (s.pitch > 0) {
+      const d = s.pitch - avgPitch;
+      pitchVar += d * d;
+    }
+  }
+  if (pitchCount > 1) pitchVar = Math.sqrt(pitchVar / pitchCount);
+
+  // SLANT: higher pitch = more forward slant (italic-like).
+  // Range roughly -0.15 to +0.25 radians (about -8° to +14°)
+  const pitchNorm = avgPitch > 0 ? Math.max(0, Math.min(1, (avgPitch - 100) / 200)) : 0.5;
+  hand.slant = -0.15 + pitchNorm * 0.4;
+
+  // X-HEIGHT: louder voice = taller writing. Centroid also nudges it.
+  // Range 18 to 45 px
+  const loudness = Math.min(1, avgRMS * 8);
+  hand.xHeight = 18 + loudness * 22 + avgCentroid * 5;
+
+  // TREMOR FREQUENCY: pitch variance maps to writing rhythm.
+  // Steadier voice = slower tremor; more variable = faster.
+  hand.tremorFreq = 0.08 + Math.min(0.2, pitchVar / 200);
+
+  // LOOP BIAS: spectral centroid biases whether loops curl up or down.
+  // High centroid voices = up-curling, low = down-curling
+  hand.loopBias = (avgCentroid - 0.5) * 1.8;
+
+  // FORWARD SPEED: lower-pitched voices write a touch slower
+  hand.forwardSpeed = 0.7 + pitchNorm * 0.6;
+
+  handCalibrated = true;
+}
+
+function endStroke() {
+  isDrawing = false;
+  status.textContent = "ready";
+}
+
+// ---------- Drawing ----------
+// We draw the stroke as densely-packed filled circles with variable radius.
+// This gives a fluid, ink-like quality that lineTo() can't, and supersampling
+// at 2x DPR (minimum) keeps it from looking like pixels.
+function paintStroke() {
+  // We don't clear; the stroke accumulates. New points draw on top.
+  const lastIdx = strokePoints.length - 1;
+  if (lastIdx < 1) return;
+  const start = Math.max(0, lastPaintedIdx);
+  for (let i = start; i <= lastIdx; i++) {
+    const p = strokePoints[i];
+    drawDot(p);
+  }
+  lastPaintedIdx = lastIdx;
+}
+
+let lastPaintedIdx = -1;
+
+function drawDot(p) {
+  ctx.beginPath();
+  ctx.fillStyle = `rgba(26, 22, 18, ${p.alpha})`;
+  ctx.arc(p.x, p.y, p.w / 2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function clearCanvas() {
+  ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+  lastPaintedIdx = -1;
+}
+
+// ---------- Update loop ----------
+function tick() {
+  if (!analyser) {
+    rafId = requestAnimationFrame(tick);
+    return;
+  }
+
+  const rms = getRMS();
+  const spec = getSpectralFeatures();
+  const pitch = detectPitch();
+
+  // Continuously calibrate ambient RMS when NOT drawing.
+  if (!isDrawing && rms < 0.03) {
+    ambientRMS = ambientRMS * 0.98 + rms * 0.02;
+  }
+
+  // Voice presence: either RMS clearly above ambient, OR a detected pitch,
+  // OR absolute RMS that's clearly speech regardless of ambient (the gain
+  // boost makes ambient noisier too, so absolute thresholds become reliable).
+  const hasVoice = rms > ambientRMS * 1.4 || pitch > 0 || rms > 0.05;
+
+  // Draw live waveform — this tells us at a glance whether the mic is
+  // actually receiving anything at all.
+  drawScope();
+
+  // Live debug readout
+  const pitchLabel = pitch > 0 ? Math.round(pitch) + "Hz" : "—";
+  const micShort = selectedMicLabel.length > 22
+    ? selectedMicLabel.slice(0, 22) + "…"
+    : selectedMicLabel;
+  debug.innerHTML = `rms&nbsp;·&nbsp;${rms.toFixed(3)}<br>amb&nbsp;·&nbsp;${ambientRMS.toFixed(3)}<br>pitch·&nbsp;${pitchLabel}<br>voice·&nbsp;${hasVoice ? "yes" : "no"}<br>mic&nbsp;·&nbsp;${micShort}`;
+
+  if (isDrawing) {
+    const elapsed = performance.now() - lineStartTime;
+    const inWarmup = elapsed < WARMUP_MS;
+
+    if (hasVoice || inWarmup) {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const now = performance.now();
+
+      // Smooth audio features
+      rmsHistory.push(rms);
+      if (rmsHistory.length > RMS_SMOOTHING) rmsHistory.shift();
+      const avgRMS = rmsHistory.reduce((a, b) => a + b, 0) / rmsHistory.length;
+
+      if (pitch > 0) {
+        pitchHistory.push(pitch);
+        if (pitchHistory.length > PITCH_SMOOTHING) pitchHistory.shift();
+      }
+
+      centroidHistory.push(spec.centroidNorm);
+      if (centroidHistory.length > CENTROID_SMOOTHING) centroidHistory.shift();
+      const meanCentroid =
+        centroidHistory.reduce((a, b) => a + b, 0) / centroidHistory.length;
+      let varSum = 0;
+      for (let i = 0; i < centroidHistory.length; i++) {
+        const d = centroidHistory[i] - meanCentroid;
+        varSum += d * d;
+      }
+      centroidVariance = Math.sqrt(varSum / centroidHistory.length);
+
+      // HAND CALIBRATION — gather voice samples for the first HAND_CAL_MS,
+      // then derive the hand's writing properties from them.
+      if (!handCalibrated) {
+        handSamples.push({
+          rms: rms,
+          pitch: pitch,
+          centroid: spec.centroidNorm,
+        });
+        if (elapsed >= HAND_CAL_MS) {
+          calibrateHand();
+        }
+      }
+
+      // PEN LIFT — much more sensitive than before. The line should be
+      // mostly BROKEN, with brief moments of connection. Most of the time
+      // the pen is in the air.
+      const liftThreshold = Math.max(0.025, ambientRMS * 3.5);
+      if (avgRMS < liftThreshold) {
+        pen.quietFrames++;
+        pen.voiceFrames = 0;
+        if (pen.quietFrames >= 3) {  // faster lift
+          if (pen.down) {
+            lastLiftAt = now;
+          }
+          pen.down = false;
+        }
+      } else {
+        pen.voiceFrames++;
+        pen.quietFrames = 0;
+        if (pen.voiceFrames >= FRAMES_TO_DROP) {
+          if (!pen.down) {
+            // Just landed after a lift — if it was a long lift (word boundary)
+            // jump the pen forward and reset vertical to baseline
+            const liftDuration = now - lastLiftAt;
+            if (liftDuration > 120) {
+              // Word break: noticeable horizontal gap, reset to baseline
+              pen.x += hand.xHeight * 0.5 + Math.random() * hand.xHeight * 0.4;
+              pen.yLocal = pen.yLocal * 0.3; // partial return to baseline
+            }
+          }
+          pen.down = true;
+        }
+      }
+
+      // ABUSE LEVEL relative to ambient
+      const ambientRatio = avgRMS / Math.max(0.002, ambientRMS);
+      const abuseLevel = Math.min(1, Math.max(0, (ambientRatio - ABUSE_RATIO) / 25));
+
+      // EVENT DETECTION: vowel (sustained voiced) vs consonant (transient/unvoiced)
+      // Vowels drive loops/curls. Consonants drive small downstrokes or marks.
+      const isVoiced = pitch > 0;
+      const isStable = centroidVariance < 0.03 && avgRMS > 0.015;
+      const wasInVowel = inVowel;
+      inVowel = isVoiced && isStable;
+
+      if (inVowel) vowelFrames++;
+      else vowelFrames = 0;
+
+      // Detect amplitude peaks (downstroke triggers)
+      const ampPeak = avgRMS > 0.04 && rms > avgRMS * 1.15;
+      if (ampPeak && (now - lastAmpPeakAt) > 150 && downstrokeProgress < 0) {
+        // Start a new downstroke
+        lastAmpPeakAt = now;
+        downstrokeProgress = 0;
+        downstrokeStartY = pen.yLocal;
+        // Downstroke depth scales with intensity (this gets us below baseline)
+        const intensity = Math.min(1, avgRMS * 8);
+        downstrokeTargetDepth = hand.xHeight * (0.5 + intensity * 0.7);
+      }
+
+      // Compute the pen's TARGET vertical position in local frame.
+      let targetYLocal = 0;
+
+      if (pen.down) {
+        // ONSET DETECTION: only the most emphatic moments fire gestures.
+        // Most syllables produce nothing. The eye should be surprised when
+        // something happens.
+        const rmsDelta = avgRMS - prevAvgRMS;
+        const onsetThreshold = Math.max(0.025, ambientRMS * 4);
+        const isOnset =
+          rmsDelta > onsetThreshold &&
+          avgRMS > 0.045 &&
+          (now - lastOnsetAt) > 280;  // longer gap between gestures
+
+        if (isOnset) {
+          lastOnsetAt = now;
+          inLetterZone = true;
+          letterZoneStart = now;
+          letterZoneStartX = pen.x;
+          nextStrokeDirection *= -1;
+
+          const pitchNorm = pitch > 0 ? Math.max(0, Math.min(1, (pitch - 100) / 200)) : 0.5;
+          zoneHasHook = isVoiced && Math.random() < 0.6;
+          zoneHasLoop = pitchNorm > 0.5 && Math.random() < 0.6;
+          zoneHasOvershoot = rmsDelta > onsetThreshold * 1.4;
+
+          // DRAMATIC depth scale when a gesture does fire — 2-3x what we had
+          const intensity = Math.min(1, avgRMS * 12);
+          zoneDepthScale = 1.6 + intensity * 1.4 + (Math.random() - 0.5) * 0.4;
+
+          zoneDuration = isVoiced ? 220 + Math.random() * 100 : 140 + Math.random() * 60;
+        }
+
+        const zoneAge = now - letterZoneStart;
+        if (inLetterZone && zoneAge > zoneDuration) {
+          inLetterZone = false;
+        }
+
+        let targetYLocal = 0;
+        let inUpstroke = false;
+
+        if (inLetterZone) {
+          const t = zoneAge / zoneDuration;
+          const arcHeight = hand.xHeight * zoneDepthScale;
+
+          // PRIMARY ARC: the main vertical stroke. Asymmetric — faster on
+          // the way out, slower on the way back, which mimics how hands
+          // actually move (downstroke is fast and confident, upstroke is
+          // more deliberate).
+          let arcShape;
+          if (t < 0.42) {
+            // Downstroke — quick, easeOut
+            const dt = t / 0.42;
+            arcShape = Math.sin(dt * Math.PI * 0.5);
+          } else {
+            // Upstroke — slower, lingering
+            const dt = (t - 0.42) / 0.58;
+            arcShape = Math.cos(dt * Math.PI * 0.5);
+            inUpstroke = true;
+          }
+          targetYLocal = arcShape * arcHeight * nextStrokeDirection;
+
+          // HOOK at the start: small counter-direction nudge for the first 10%
+          if (zoneHasHook && t < 0.1) {
+            const hookT = t / 0.1;
+            const hookCurve = Math.sin(hookT * Math.PI);
+            targetYLocal -= hookCurve * arcHeight * 0.15 * nextStrokeDirection;
+          }
+
+          // LOOP at the apex: a small circular motion around the high point.
+          // Only fires on zones marked for loops at onset time.
+          if (zoneHasLoop && t > 0.32 && t < 0.55) {
+            const loopT = (t - 0.32) / 0.23;
+            const loopAngle = loopT * Math.PI * 2;
+            const loopRadius = arcHeight * 0.18;
+            targetYLocal +=
+              Math.sin(loopAngle) * loopRadius * (-nextStrokeDirection);
+          }
+
+          // OVERSHOOT at the end: pen goes slightly past baseline before settling
+          if (zoneHasOvershoot && t > 0.85) {
+            const overT = (t - 0.85) / 0.15;
+            const overCurve = Math.sin(overT * Math.PI);
+            targetYLocal -= overCurve * arcHeight * 0.12 * nextStrokeDirection;
+          }
+        }
+
+        // Very subtle tremor
+        hand.tremorPhase += hand.tremorFreq;
+        const tremor = Math.sin(hand.tremorPhase) * 0.15;
+
+        // Easing: stronger when committing to a gesture, gentler when connecting
+        const ease = inLetterZone ? 0.4 : 0.18;
+        pen.yLocal += (targetYLocal - pen.yLocal) * ease;
+        pen.yLocal += tremor;
+
+        // Stash upstroke flag for width modulation
+        pen._inUpstroke = inUpstroke;
+      }
+
+      prevAvgRMS = avgRMS;
+
+      // PRESSURE from centroid stability + abuse boost
+      const stability = 1 - Math.min(1, centroidVariance * 8);
+      const targetPressure = 0.3 + stability * 0.55 + abuseLevel * 0.15;
+      pen.pressure += (targetPressure - pen.pressure) * 0.2;
+
+      // Forward speed in the hand's frame
+      const speedFromAmp = Math.min(2.2, 0.5 + Math.log10(1 + avgRMS * 200) * 1.4);
+      const forwardStep = speedFromAmp * hand.forwardSpeed * (pen.down ? 1 : 1.3);
+
+      // Step forward
+      const prevX = pen.x;
+      const prevYLocal = pen.yLocal;
+      pen.x += forwardStep;
+
+      // SLANT: a slight per-step Y shift in the direction of motion.
+      // This tilts vertical strokes (downstrokes in letter zones) without
+      // causing the whole line to drift off the baseline. Applied to the
+      // CHANGE in y-local, not to position.
+      const slantStep = Math.tan(hand.slant) * forwardStep * 0.15;
+
+      const prevScreenY = hand.baselineY + prevYLocal;
+      const currScreenY = hand.baselineY + pen.yLocal + slantStep;
+
+      // Width: thin connector lines, dramatic gesture widths.
+      // Outside a letter zone, the line is a hair. Inside, it has full weight.
+      const directionWidthMult = pen._inUpstroke ? 0.55 : 1.0;
+      const inGestureMult = inLetterZone ? 1.0 : 0.32;
+      const width = (MIN_WIDTH + pen.pressure * (MAX_WIDTH - MIN_WIDTH)) * directionWidthMult * inGestureMult;
+
+      // Lay down ink only when pen is down
+      if (pen.down) {
+        const dx = pen.x - prevX;
+        const dy = currScreenY - prevScreenY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const steps = Math.max(1, Math.ceil(dist / 0.9));
+        const wobbleAmp = 0.5 + abuseLevel * 4;
+
+        for (let s = 1; s <= steps; s++) {
+          const t = s / steps;
+          const wobble = (Math.random() - 0.5) * wobbleAmp;
+          // Perpendicular to local motion direction
+          const dirX = dx / Math.max(dist, 0.001);
+          const dirY = dy / Math.max(dist, 0.001);
+          const perpX = -dirY * wobble;
+          const perpY = dirX * wobble;
+          const alpha = (0.72 + Math.random() * 0.2) * (0.55 + pen.pressure * 0.45);
+          strokePoints.push({
+            x: prevX + dx * t + perpX,
+            y: prevScreenY + dy * t + perpY,
+            w: width * (0.88 + Math.random() * 0.2),
+            alpha: alpha,
+          });
+        }
+
+        // ABUSE SPLATTER
+        if (abuseLevel > 0.1) {
+          if (Math.random() < abuseLevel * 0.7) {
+            const splatterCount = 1 + Math.floor(abuseLevel * 4);
+            for (let i = 0; i < splatterCount; i++) {
+              const angle = Math.random() * Math.PI * 2;
+              const distFromPen = 4 + Math.random() * (10 + abuseLevel * 30);
+              strokePoints.push({
+                x: pen.x + Math.cos(angle) * distFromPen,
+                y: currScreenY + Math.sin(angle) * distFromPen,
+                w: 0.8 + Math.random() * (1.5 + abuseLevel * 2),
+                alpha: 0.4 + Math.random() * 0.4,
+              });
+            }
+          }
+        }
+
+        // ============================================================
+        // FLOURISHES — rare, surprising marks at exceptional moments
+        // The eye should NOT be able to predict these. They're the
+        // moment of poetry in an otherwise restrained line.
+        // ============================================================
+
+        // Track sustained intensity
+        if (avgRMS > 0.08) sustainedIntenseFrames++;
+        else sustainedIntenseFrames = Math.max(0, sustainedIntenseFrames - 2);
+
+        // Track sustained high pitch
+        if (pitch > 280 && isVoiced) highPitchHeldFrames++;
+        else highPitchHeldFrames = Math.max(0, highPitchHeldFrames - 2);
+
+        const flourishCooldown = (now - lastFlourishAt) > 600;
+
+        if (flourishCooldown) {
+          // FLOURISH 1: long trailing tail — when intensity has been sustained,
+          // the pen drags a thin trail forward, like a held note bleeding ink.
+          if (sustainedIntenseFrames > 18 && Math.random() < 0.04) {
+            lastFlourishAt = now;
+            sustainedIntenseFrames = 0;
+            const trailLen = 20 + Math.random() * 60;
+            const trailAngle = (Math.random() - 0.5) * 0.4;
+            const trailSteps = Math.floor(trailLen / 1.2);
+            const trailFadeStart = 0.6 + Math.random() * 0.2;
+            for (let i = 0; i < trailSteps; i++) {
+              const tt = i / trailSteps;
+              const fadeIn = Math.min(1, tt * 4);
+              const fadeOut = tt > trailFadeStart
+                ? 1 - (tt - trailFadeStart) / (1 - trailFadeStart)
+                : 1;
+              const fade = fadeIn * fadeOut;
+              strokePoints.push({
+                x: pen.x + tt * trailLen,
+                y: currScreenY + Math.sin(trailAngle) * tt * trailLen +
+                    (Math.random() - 0.5) * 0.6,
+                w: 0.7 + Math.random() * 0.4,
+                alpha: fade * (0.45 + Math.random() * 0.2),
+              });
+            }
+          }
+          // FLOURISH 2: scattered cluster of dots — when high pitch is held,
+          // a small constellation appears nearby, like a held note ringing
+          else if (highPitchHeldFrames > 12 && Math.random() < 0.05) {
+            lastFlourishAt = now;
+            highPitchHeldFrames = 0;
+            const dotCount = 5 + Math.floor(Math.random() * 8);
+            const clusterRadius = 12 + Math.random() * 18;
+            const clusterAngle = -Math.PI / 2 + (Math.random() - 0.5) * 0.6;
+            const cx = pen.x + Math.cos(clusterAngle) * clusterRadius * 0.6;
+            const cy = currScreenY + Math.sin(clusterAngle) * clusterRadius * 0.6;
+            for (let i = 0; i < dotCount; i++) {
+              const a = Math.random() * Math.PI * 2;
+              const r = Math.random() * clusterRadius * 0.7;
+              strokePoints.push({
+                x: cx + Math.cos(a) * r,
+                y: cy + Math.sin(a) * r,
+                w: 0.6 + Math.random() * 0.9,
+                alpha: 0.35 + Math.random() * 0.35,
+              });
+            }
+          }
+          // FLOURISH 3: sharp emphatic mark — a single thick vertical line
+          // appears below the baseline, on the sharpest of plosive onsets.
+          else if (rms - prevAvgRMS > 0.08 && Math.random() < 0.25) {
+            lastFlourishAt = now;
+            const markLen = 8 + Math.random() * 16;
+            const markSteps = Math.ceil(markLen / 0.8);
+            const markAngle = Math.PI / 2 + (Math.random() - 0.5) * 0.5;
+            const markX = pen.x + (Math.random() - 0.5) * 4;
+            for (let i = 0; i < markSteps; i++) {
+              const tt = i / markSteps;
+              const fade = 1 - tt * 0.6;
+              strokePoints.push({
+                x: markX + Math.cos(markAngle) * tt * markLen,
+                y: currScreenY + Math.sin(markAngle) * tt * markLen + 3,
+                w: 1.5 + Math.random() * 1.2,
+                alpha: fade * (0.55 + Math.random() * 0.25),
+              });
+            }
+          }
+        }
+      }
+
+      // ============================================================
+      // ORNAMENTAL BEHAVIORS (toggleable)
+      // ============================================================
+      if (ornamentsEnabled && pen.down) {
+        // Sibilants: perpendicular scratches across the line
+        const isSibilant =
+          meanCentroid > 0.55 &&
+          centroidVariance > 0.06 &&
+          (pitch === 0 || pitch > 300);
+        if (isSibilant && avgRMS < 0.08 && Math.random() < 0.4) {
+          for (let i = 0; i < 4; i++) {
+            const t = (i / 4 - 0.5) * 2;
+            const localX = pen.x + Math.cos(hand.slant + Math.PI/2) * 4 * t;
+            const localY = currScreenY + Math.sin(hand.slant + Math.PI/2) * 4 * t;
+            strokePoints.push({
+              x: localX,
+              y: localY,
+              w: 0.8 + Math.random() * 0.6,
+              alpha: 0.35 + Math.random() * 0.3,
+            });
+          }
+        }
+      }
+
+      if (pen.x > w * 0.94) endStroke();
+
+      paintStroke();
+
+      const dB = Math.round(20 * Math.log10(Math.max(rms, 0.0001)));
+      const penState = pen.down ? "·" : "↑";
+      status.textContent = `speaking · ${dB} dB ${penState}`;
+    } else {
+      // No voice — pen is up, nothing happens
+      pen.quietFrames++;
+      pen.voiceFrames = 0;
+      if (pen.quietFrames >= FRAMES_TO_LIFT) pen.down = false;
+    }
+  }
+
+  rafId = requestAnimationFrame(tick);
+}
+
+// ---------- Input handling ----------
+let spaceHeld = false;
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && !spaceHeld) {
+    spaceHeld = true;
+    e.preventDefault();
+    hint.classList.add("hidden");
+    if (analyser) {
+      clearCanvas();
+      beginStroke();
+    }
+  }
+});
+window.addEventListener("keyup", (e) => {
+  if (e.code === "Space") {
+    spaceHeld = false;
+    e.preventDefault();
+    if (isDrawing) endStroke();
+    hint.classList.remove("hidden");
+  }
+});
+
+// ---------- Toggle ----------
+const toggle = document.getElementById("toggle");
+toggle.addEventListener("click", () => {
+  ornamentsEnabled = !ornamentsEnabled;
+  toggle.classList.toggle("on", ornamentsEnabled);
+});
+
+// ---------- Entry ----------
+enterBtn.addEventListener("click", async () => {
+  enterBtn.disabled = true;
+  enterBtn.textContent = "Listening...";
+  try {
+    await initAudio();
+    gate.classList.add("hidden");
+    setTimeout(() => (gate.style.display = "none"), 800);
+    tick();
+  } catch (err) {
+    enterBtn.textContent = "Microphone needed";
+    console.error(err);
+  }
+});
+</script>
+
+</body>
+</html>
