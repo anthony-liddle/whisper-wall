@@ -17,9 +17,19 @@ The whole shipped piece must fit in 2MB. No frameworks, no bundlers, no large de
 The piece needs to be served over HTTP (microphone access requires a secure context, and the engine is loaded as a sibling script). From the repo root:
 
 ```
-python3 -m http.server 8000
+npm start
 ```
 
-Then open `http://localhost:8000/demo.html`. Hold the spacebar and speak.
+That runs `npx serve .` — no install, no dependencies, just a one-shot static server. By default it picks an open port and prints the URL.
 
-To run the original prototype as a comparison, open `http://localhost:8000/prototype/prototype.html` in another tab.
+If you'd rather invoke it yourself:
+
+```
+npx serve .
+# or, if serve has any quirks for your setup:
+npx http-server . -p 8000
+```
+
+Then open `demo.html` at the printed URL. Hold the spacebar and speak.
+
+To run the original prototype as a comparison, open `prototype/prototype.html` at the same host in another tab.
