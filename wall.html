@@ -126,12 +126,17 @@
     white-space: pre;
   }
 
-  .toggle {
+  .toggles {
     position: absolute;
     top: 2.5rem;
-    right: 50%;
-    transform: translateX(50%);
+    left: 50%;
+    transform: translateX(-50%);
     z-index: 3;
+    display: flex;
+    gap: 2.2rem;
+    pointer-events: auto;
+  }
+  .toggle {
     display: flex;
     align-items: center;
     gap: 0.6rem;
@@ -141,7 +146,6 @@
     color: var(--ink-faint);
     cursor: pointer;
     user-select: none;
-    pointer-events: auto;
     transition: color 0.3s ease;
   }
   .toggle:hover { color: var(--ink-soft); }
@@ -226,9 +230,15 @@
 <div class="ui title">Whisper Wall</div>
 <div class="ui meta">v0.1</div>
 
-<div class="toggle" id="toggle">
-  <span>Ornaments</span>
-  <span class="toggle-dot"></span>
+<div class="toggles">
+  <div class="toggle" id="toggleOrnaments">
+    <span>Ornaments</span>
+    <span class="toggle-dot"></span>
+  </div>
+  <div class="toggle" id="toggleSmooth">
+    <span>Smooth Lines</span>
+    <span class="toggle-dot"></span>
+  </div>
 </div>
 
 <div class="ui hint" id="hint">
@@ -310,25 +320,44 @@ const FULL_FADE = 1 + FADE_SMEAR;
 // before this kicks in; if it ever does, the oldest goes.
 const MAX_STROKES = 30;
 
+// Densification — at wall scale, engine point spacing (~0.9px native, ~0.4px
+// screen) reads as discrete dots rather than a continuous line. When enabled,
+// we interpolate extra points at paint time so adjacent screen-space spacing
+// stays under DENSIFY_TARGET_PX. Beyond DENSIFY_MAX_GAP_PX we treat the gap
+// as intentional (splatters, dot-cluster flourishes, dot/mark separations)
+// and leave it alone so it doesn't get connected into a streak.
+// This is toggleable from the UI so we can compare both looks.
+let DENSIFY_STROKES = true;
+const DENSIFY_TARGET_PX = 1.2;
+const DENSIFY_MAX_GAP_PX = 4;
+
 function beginStroke() {
   active = { points: [], fadeOffsets: [] };
-  engine.beginStroke({ originX: originX, originY: landingY });
+  // The active stroke is drawn in the writing slot (one line-height below
+  // landing). originY is stored by the engine for caller reference only;
+  // emitted points are in the engine's own (0,0)-relative frame regardless.
+  engine.beginStroke({ originX: originX, originY: landingY + lineHeight });
   status.textContent = "listening";
 }
 
 function commitActiveStroke() {
   if (!active) return;
   if (active.points.length === 0) {
+    // Empty press — no points emitted means no slot consumed, no shift.
     active = null;
     return;
   }
   // Existing strokes step up one slot.
   for (const s of strokes) s.slotIndex += 1;
+  // The new stroke takes slot 0 (target landingY), but its currentY starts
+  // at the writing slot one line-height below where active was being rendered.
+  // The shared SHIFT_EASE then carries it up by exactly one line-height in
+  // lockstep with every other stroke moving up by the same amount.
   strokes.push({
     points: active.points,
     fadeOffsets: active.fadeOffsets,
     slotIndex: 0,
-    currentY: landingY,
+    currentY: landingY + lineHeight,
     fadeProgress: 0,
   });
   active = null;
@@ -367,41 +396,83 @@ function fadeProgressForY(y) {
   return ((fadeStartY - y) / (fadeStartY - fadeEndY)) * FULL_FADE;
 }
 
+// Per-point fade multiplier — points with low fade-offsets disappear first,
+// points with high offsets hold on longer. Returns 0 if the point is fully
+// gone (caller should skip rendering it).
+function fadeMultiplier(fade, off) {
+  if (fade <= 0) return 1;
+  const diff = fade - off;
+  if (diff >= FADE_SMEAR) return 0;
+  if (diff > 0) return 1 - diff / FADE_SMEAR;
+  return 1;
+}
+
+function paintPoint(px, py, pw, alpha, yBase) {
+  if (alpha <= 0) return;
+  drawDot(
+    originX + px * scale,
+    yBase + py * scale,
+    Math.max(0.5, pw * scale),
+    alpha,
+  );
+}
+
+// Walk a points array and paint each one, plus interpolated intermediates
+// when DENSIFY_STROKES is on. fadeOffsets may be null (active stroke), in
+// which case no fade is applied and intermediates inherit the average of
+// their neighbours' offsets only for completed-stroke purposes.
+function paintPointsArray(pts, offs, yBase, fade) {
+  const n = pts.length;
+  if (n === 0) return;
+
+  // First point always rendered.
+  const off0 = offs ? offs[0] : 0;
+  const m0 = fade > 0 ? fadeMultiplier(fade, off0) : 1;
+  if (m0 > 0) paintPoint(pts[0].x, pts[0].y, pts[0].w, pts[0].alpha * m0, yBase);
+
+  for (let i = 1; i < n; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+
+    if (DENSIFY_STROKES) {
+      const dxScreen = (b.x - a.x) * scale;
+      const dyScreen = (b.y - a.y) * scale;
+      const distScreen = Math.sqrt(dxScreen * dxScreen + dyScreen * dyScreen);
+      if (distScreen > DENSIFY_TARGET_PX && distScreen <= DENSIFY_MAX_GAP_PX) {
+        const steps = Math.ceil(distScreen / DENSIFY_TARGET_PX);
+        const offMid = offs ? (offs[i - 1] + offs[i]) / 2 : 0;
+        const midMult = fade > 0 ? fadeMultiplier(fade, offMid) : 1;
+        if (midMult > 0) {
+          for (let k = 1; k < steps; k++) {
+            const t = k / steps;
+            const ix = a.x + (b.x - a.x) * t;
+            const iy = a.y + (b.y - a.y) * t;
+            const iw = a.w + (b.w - a.w) * t;
+            const ialpha = a.alpha + (b.alpha - a.alpha) * t;
+            paintPoint(ix, iy, iw, ialpha * midMult, yBase);
+          }
+        }
+      }
+    }
+
+    const offB = offs ? offs[i] : 0;
+    const mB = fade > 0 ? fadeMultiplier(fade, offB) : 1;
+    if (mB > 0) paintPoint(b.x, b.y, b.w, b.alpha * mB, yBase);
+  }
+}
+
 function renderStroke(s) {
   if (s.fadeProgress >= FULL_FADE) return;
-  const fade = s.fadeProgress;
-  const yBase = s.currentY;
-  const pts = s.points;
-  const offs = s.fadeOffsets;
-  for (let i = 0; i < pts.length; i++) {
-    const p = pts[i];
-    let mult = 1;
-    if (fade > 0) {
-      const diff = fade - offs[i];
-      if (diff >= FADE_SMEAR) continue; // fully gone
-      if (diff > 0) mult = 1 - diff / FADE_SMEAR;
-    }
-    drawDot(
-      originX + p.x * scale,
-      yBase + p.y * scale,
-      Math.max(0.5, p.w * scale),
-      p.alpha * mult,
-    );
-  }
+  paintPointsArray(s.points, s.fadeOffsets, s.currentY, s.fadeProgress);
 }
 
 function renderActive() {
   if (!active) return;
-  const pts = active.points;
-  for (let i = 0; i < pts.length; i++) {
-    const p = pts[i];
-    drawDot(
-      originX + p.x * scale,
-      landingY + p.y * scale,
-      Math.max(0.5, p.w * scale),
-      p.alpha,
-    );
-  }
+  // Active stroke renders in the writing slot — one line-height below the
+  // landing position, so the user always has clear space below the wall to
+  // draw into. On commit, it eases up by exactly one line-height while the
+  // rest of the wall does the same; everyone moves in lockstep.
+  paintPointsArray(active.points, null, landingY + lineHeight, 0);
 }
 
 // ---------- Frame loop ----------
@@ -481,11 +552,18 @@ window.addEventListener("keyup", (e) => {
   }
 });
 
-const toggle = document.getElementById("toggle");
-toggle.addEventListener("click", () => {
+const toggleOrnaments = document.getElementById("toggleOrnaments");
+toggleOrnaments.addEventListener("click", () => {
   const next = !engine.ornamentsEnabled;
   engine.setOrnaments(next);
-  toggle.classList.toggle("on", next);
+  toggleOrnaments.classList.toggle("on", next);
+});
+
+const toggleSmooth = document.getElementById("toggleSmooth");
+toggleSmooth.classList.toggle("on", DENSIFY_STROKES);
+toggleSmooth.addEventListener("click", () => {
+  DENSIFY_STROKES = !DENSIFY_STROKES;
+  toggleSmooth.classList.toggle("on", DENSIFY_STROKES);
 });
 
 enterBtn.addEventListener("click", async () => {
