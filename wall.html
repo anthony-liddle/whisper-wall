@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Whisper Wall</title>
+<style>
+  :root {
+    --paper: #f4ede0;
+    --paper-warm: #ebe1cd;
+    --ink: #1a1612;
+    --ink-soft: rgba(26, 22, 18, 0.55);
+    --ink-faint: rgba(26, 22, 18, 0.28);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+    overflow: hidden;
+  }
+
+  body {
+    background-image:
+      radial-gradient(ellipse at 30% 20%, rgba(180, 150, 100, 0.05), transparent 60%),
+      radial-gradient(ellipse at 70% 80%, rgba(120, 90, 50, 0.04), transparent 55%);
+    position: relative;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.1, 0 0 0 0 0.08, 0 0 0 0 0.06, 0 0 0 0.10 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    opacity: 0.5;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  #stage {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+  }
+
+  #canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .ui {
+    position: absolute;
+    z-index: 3;
+    user-select: none;
+    pointer-events: none;
+  }
+
+  .title {
+    top: 2.5rem;
+    left: 3rem;
+    font-size: 0.78rem;
+    letter-spacing: 0.35em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    font-weight: 400;
+  }
+
+  .meta {
+    top: 2.5rem;
+    right: 3rem;
+    font-size: 0.78rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    text-align: right;
+  }
+
+  .hint {
+    bottom: 3rem;
+    left: 50%;
+    transform: translateX(-50%);
+    font-style: italic;
+    font-size: 1.05rem;
+    color: var(--ink-soft);
+    text-align: center;
+    transition: opacity 0.6s ease;
+  }
+
+  .hint.hidden { opacity: 0; }
+
+  .hint kbd {
+    font-family: inherit;
+    font-style: normal;
+    border-bottom: 1px solid var(--ink-faint);
+    padding: 0 0.25em;
+  }
+
+  .status {
+    bottom: 1.25rem;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.7rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    transition: opacity 0.3s ease;
+  }
+
+  .debug {
+    position: absolute;
+    bottom: 1.25rem;
+    right: 1.5rem;
+    z-index: 3;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.65rem;
+    color: var(--ink-faint);
+    line-height: 1.5;
+    text-align: right;
+    pointer-events: none;
+    user-select: none;
+    white-space: pre;
+  }
+
+  .toggle {
+    position: absolute;
+    top: 2.5rem;
+    right: 50%;
+    transform: translateX(50%);
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    cursor: pointer;
+    user-select: none;
+    pointer-events: auto;
+    transition: color 0.3s ease;
+  }
+  .toggle:hover { color: var(--ink-soft); }
+  .toggle-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 1px solid var(--ink-faint);
+    transition: background 0.3s ease, border-color 0.3s ease;
+  }
+  .toggle.on .toggle-dot {
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+
+  .gate {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--paper);
+    transition: opacity 0.8s ease;
+  }
+  .gate.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .gate-inner {
+    text-align: center;
+    max-width: 32rem;
+    padding: 2rem;
+  }
+  .gate h1 {
+    font-size: 0.85rem;
+    letter-spacing: 0.4em;
+    text-transform: uppercase;
+    font-weight: 400;
+    color: var(--ink-soft);
+    margin-bottom: 2rem;
+  }
+  .gate p {
+    font-style: italic;
+    font-size: 1.15rem;
+    line-height: 1.6;
+    color: var(--ink);
+    margin-bottom: 2.5rem;
+  }
+  .gate button {
+    background: none;
+    border: 1px solid var(--ink-soft);
+    color: var(--ink);
+    font-family: inherit;
+    font-size: 0.75rem;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    padding: 0.9rem 2.2rem;
+    cursor: pointer;
+    transition: background 0.3s ease, color 0.3s ease;
+  }
+  .gate button:hover {
+    background: var(--ink);
+    color: var(--paper);
+  }
+</style>
+</head>
+<body>
+
+<div class="gate" id="gate">
+  <div class="gate-inner">
+    <h1>Whisper Wall</h1>
+    <p>Microphone access is requested to listen for your voice. Hold space and speak. Nothing is recorded or sent anywhere.</p>
+    <button id="enterBtn">Enter</button>
+  </div>
+</div>
+
+<div id="stage">
+  <canvas id="canvas"></canvas>
+</div>
+
+<div class="ui title">Whisper Wall</div>
+<div class="ui meta">v0.1</div>
+
+<div class="toggle" id="toggle">
+  <span>Ornaments</span>
+  <span class="toggle-dot"></span>
+</div>
+
+<div class="ui hint" id="hint">
+  Hold <kbd>space</kbd> and speak.
+</div>
+
+<div class="ui status" id="status">ready</div>
+<div class="debug" id="debug">strokes · 0
+rms     · —
+pitch   · —
+mic     · —</div>
+
+<script src="engine.js"></script>
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d", { alpha: true });
+let dpr = Math.max(2, window.devicePixelRatio || 1);
+
+const hint = document.getElementById("hint");
+const status = document.getElementById("status");
+const gate = document.getElementById("gate");
+const enterBtn = document.getElementById("enterBtn");
+const debug = document.getElementById("debug");
+
+const engine = new LineEngine({ gainBoost: 15 });
+
+// ---------- Layout ----------
+// Line count targets 18-25 on a typical desktop. lineHeight is derived from
+// viewport so the wall expands/contracts with the window. New strokes land at
+// 2/3 down; older strokes stack upward from there.
+let viewW = 0;
+let viewH = 0;
+let lineHeight = 40;
+let landingY = 0;
+let originX = 0;
+let scale = 0.5; // applied uniformly to engine-native points and widths
+
+// Native engine xHeight is ~18-45 with depth scales 1.6-3.0 stacked on top.
+// Vertical peaks land around 60-90 px in the engine's frame. We want strokes
+// to sit comfortably inside a slot — about 80% of the line-height for the
+// arc, with room for occasional descenders to cross into the neighbour.
+const NATIVE_VERTICAL_EXTENT = 70;
+
+function resize() {
+  viewW = window.innerWidth;
+  viewH = window.innerHeight;
+  canvas.width = Math.floor(viewW * dpr);
+  canvas.height = Math.floor(viewH * dpr);
+  canvas.style.width = viewW + "px";
+  canvas.style.height = viewH + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const targetLines = Math.max(18, Math.min(25, Math.floor(viewH / 42)));
+  lineHeight = viewH / targetLines;
+  landingY = viewH * 0.67;
+  originX = viewW * 0.06;
+  scale = (lineHeight * 0.8) / NATIVE_VERTICAL_EXTENT;
+}
+window.addEventListener("resize", resize);
+resize();
+
+// ---------- Strokes ----------
+// Each completed stroke retains its points in engine-native coordinates plus
+// a parallel array of per-point fade offsets (uniform random in [0,1]). At
+// paint time the host scales by `scale` and offsets to currentY. The fade
+// offset is a per-point threshold — when global fade progress exceeds it,
+// that specific point starts dropping out, giving the chalk-wear look.
+const strokes = [];
+let active = null;
+
+// Animation tunings
+const SHIFT_EASE = 0.14; // upward easing per frame
+const FADE_SMEAR = 0.22; // width of the per-point soft transition
+
+// A stroke is fully gone once global fade exceeds 1 + FADE_SMEAR.
+const FULL_FADE = 1 + FADE_SMEAR;
+
+// Hard cap, defence in depth. Strokes should evict themselves via fade well
+// before this kicks in; if it ever does, the oldest goes.
+const MAX_STROKES = 30;
+
+function beginStroke() {
+  active = { points: [], fadeOffsets: [] };
+  engine.beginStroke({ originX: originX, originY: landingY });
+  status.textContent = "listening";
+}
+
+function commitActiveStroke() {
+  if (!active) return;
+  if (active.points.length === 0) {
+    active = null;
+    return;
+  }
+  // Existing strokes step up one slot.
+  for (const s of strokes) s.slotIndex += 1;
+  strokes.push({
+    points: active.points,
+    fadeOffsets: active.fadeOffsets,
+    slotIndex: 0,
+    currentY: landingY,
+    fadeProgress: 0,
+  });
+  active = null;
+  if (strokes.length > MAX_STROKES) strokes.shift();
+}
+
+function endStroke() {
+  engine.endStroke();
+  commitActiveStroke();
+  status.textContent = "ready";
+}
+
+// ---------- Render ----------
+function clearCanvas() {
+  ctx.clearRect(0, 0, viewW, viewH);
+}
+
+function drawDot(x, y, w, alpha) {
+  if (alpha <= 0 || w <= 0) return;
+  ctx.beginPath();
+  ctx.fillStyle = `rgba(26, 22, 18, ${alpha})`;
+  ctx.arc(x, y, w / 2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// Fade progress is a pure function of vertical position. As a stroke is
+// pushed higher, more of it wears away. Position-based eviction, per the
+// design notes — no separate timer.
+function fadeProgressForY(y) {
+  // Fade starts when the stroke is within ~1.5 line-heights of the top edge.
+  const fadeStartY = lineHeight * 1.5;
+  // Fully gone once well above the visible area.
+  const fadeEndY = -lineHeight * 1.5;
+  if (y >= fadeStartY) return 0;
+  if (y <= fadeEndY) return FULL_FADE;
+  return ((fadeStartY - y) / (fadeStartY - fadeEndY)) * FULL_FADE;
+}
+
+function renderStroke(s) {
+  if (s.fadeProgress >= FULL_FADE) return;
+  const fade = s.fadeProgress;
+  const yBase = s.currentY;
+  const pts = s.points;
+  const offs = s.fadeOffsets;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    let mult = 1;
+    if (fade > 0) {
+      const diff = fade - offs[i];
+      if (diff >= FADE_SMEAR) continue; // fully gone
+      if (diff > 0) mult = 1 - diff / FADE_SMEAR;
+    }
+    drawDot(
+      originX + p.x * scale,
+      yBase + p.y * scale,
+      Math.max(0.5, p.w * scale),
+      p.alpha * mult,
+    );
+  }
+}
+
+function renderActive() {
+  if (!active) return;
+  const pts = active.points;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    drawDot(
+      originX + p.x * scale,
+      landingY + p.y * scale,
+      Math.max(0.5, p.w * scale),
+      p.alpha,
+    );
+  }
+}
+
+// ---------- Frame loop ----------
+function frame() {
+  // Engine ticks every frame so ambient calibration runs even when idle.
+  const newPoints = engine.tick();
+
+  if (active && newPoints.length) {
+    for (const p of newPoints) {
+      active.points.push(p);
+      active.fadeOffsets.push(Math.random());
+    }
+  }
+
+  // Advance completed strokes toward their target positions and compute fade.
+  for (let i = strokes.length - 1; i >= 0; i--) {
+    const s = strokes[i];
+    const targetY = landingY - s.slotIndex * lineHeight;
+    s.currentY += (targetY - s.currentY) * SHIFT_EASE;
+    s.fadeProgress = fadeProgressForY(s.currentY);
+    if (s.fadeProgress >= FULL_FADE) {
+      strokes.splice(i, 1);
+    }
+  }
+
+  // Naive: clear and repaint every frame. With ~20 strokes of a few hundred
+  // points each, this stays comfortably under 16ms on a modern machine.
+  // Revisit (offscreen cache per stroke) only if a real performance need shows.
+  clearCanvas();
+  for (const s of strokes) renderStroke(s);
+  renderActive();
+
+  // Viewport auto-end: matches the demo's right-edge stop, scaled.
+  if (active) {
+    const st = engine.getStatus();
+    if (originX + st.penX * scale > viewW * 0.94) {
+      endStroke();
+    }
+  }
+
+  // Debug + status
+  const st = engine.getStatus();
+  const pitchLabel = st.pitch > 0 ? Math.round(st.pitch) + "Hz" : "—";
+  const micShort =
+    st.micLabel.length > 22 ? st.micLabel.slice(0, 22) + "…" : st.micLabel;
+  debug.textContent =
+    `strokes · ${strokes.length}${active ? " + 1" : ""}\n` +
+    `rms     · ${st.rms.toFixed(3)}\n` +
+    `pitch   · ${pitchLabel}\n` +
+    `mic     · ${micShort}`;
+
+  if (st.isDrawing) {
+    const dB = Math.round(20 * Math.log10(Math.max(st.rms, 0.0001)));
+    const penState = st.penDown ? "·" : "↑";
+    status.textContent = `speaking · ${dB} dB ${penState}`;
+  }
+
+  requestAnimationFrame(frame);
+}
+
+// ---------- Input ----------
+let spaceHeld = false;
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && !spaceHeld) {
+    spaceHeld = true;
+    e.preventDefault();
+    hint.classList.add("hidden");
+    if (engine.analyser && !active) beginStroke();
+  }
+});
+window.addEventListener("keyup", (e) => {
+  if (e.code === "Space") {
+    spaceHeld = false;
+    e.preventDefault();
+    if (engine.getStatus().isDrawing || active) endStroke();
+    hint.classList.remove("hidden");
+  }
+});
+
+const toggle = document.getElementById("toggle");
+toggle.addEventListener("click", () => {
+  const next = !engine.ornamentsEnabled;
+  engine.setOrnaments(next);
+  toggle.classList.toggle("on", next);
+});
+
+enterBtn.addEventListener("click", async () => {
+  enterBtn.disabled = true;
+  enterBtn.textContent = "Listening...";
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: true,
+      },
+    });
+    await engine.start(audioCtx, micStream);
+    gate.classList.add("hidden");
+    setTimeout(() => (gate.style.display = "none"), 800);
+    frame();
+  } catch (err) {
+    enterBtn.textContent = "Microphone needed";
+    console.error(err);
+  }
+});
+</script>
+
+</body>
+</html>
