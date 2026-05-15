@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/anthony-liddle/whisper-wall/discussions
+    about: Ask questions or share ideas about the project before filing an issue.
