@@ -309,6 +309,14 @@ resize();
 const strokes = [];
 let active = null;
 
+// Per-stroke debug log. Records ambient state, lift threshold, point count
+// and duration on commit so we can see whether the floor is drifting upward
+// across a session. Each line is one stroke; new strokes append.
+// Leave on for now; remove once the wall's line quality is confirmed stable.
+const DEBUG_STROKE_LOG = true;
+let strokeCounter = 0;
+let activeBeginAt = 0;
+
 // Animation tunings
 const SHIFT_EASE = 0.14; // upward easing per frame
 const FADE_SMEAR = 0.22; // width of the per-point soft transition
@@ -337,6 +345,7 @@ function beginStroke() {
   // landing). originY is stored by the engine for caller reference only;
   // emitted points are in the engine's own (0,0)-relative frame regardless.
   engine.beginStroke({ originX: originX, originY: landingY + lineHeight });
+  activeBeginAt = performance.now();
   status.textContent = "listening";
 }
 
@@ -346,6 +355,20 @@ function commitActiveStroke() {
     // Empty press — no points emitted means no slot consumed, no shift.
     active = null;
     return;
+  }
+  if (DEBUG_STROKE_LOG) {
+    strokeCounter += 1;
+    const st = engine.getStatus();
+    const durationMs = performance.now() - activeBeginAt;
+    const liftThreshold = Math.max(0.025, st.ambient * 3.5);
+    console.log(
+      `stroke #${strokeCounter}  ` +
+        `dur=${durationMs.toFixed(0)}ms  ` +
+        `points=${active.points.length}  ` +
+        `pts/s=${((active.points.length / durationMs) * 1000).toFixed(0)}  ` +
+        `ambient=${st.ambient.toFixed(4)}  ` +
+        `lift=${liftThreshold.toFixed(4)}`,
+    );
   }
   // Existing strokes step up one slot.
   for (const s of strokes) s.slotIndex += 1;

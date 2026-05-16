@@ -26,6 +26,7 @@
   const MIN_ONSET_GAP_MS = 280; // longer gap between gestures — fewer, more committed firings
   const MIN_WIDTH = 1.2;
   const MAX_WIDTH = 8;
+  const AMBIENT_RESUME_MS = 250;
 
   class LineEngine {
     constructor(opts = {}) {
@@ -109,6 +110,13 @@
       this._lastFlourishAt = -10000;
 
       this.ambientRMS = 0.003;
+
+      // Timestamp of the last endStroke(). Used to pause ambient calibration
+      // for AMBIENT_RESUME_MS after a stroke ends, so the tail of the
+      // utterance (room reverb, breath, throat settle) does not get folded
+      // into the room floor. Initialised far in the past so the very first
+      // frame can calibrate freely.
+      this._endStrokeAt = -1e9;
 
       // Live readouts for the host to surface in debug UI
       this._lastRMS = 0;
@@ -302,6 +310,7 @@
 
     endStroke() {
       this.isDrawing = false;
+      this._endStrokeAt = performance.now();
     }
 
     // Hand calibration. Maps voice qualities to writing qualities
@@ -369,8 +378,14 @@
       this._lastRMS = rms;
       this._lastPitch = pitch;
 
-      // Continuously calibrate ambient RMS when NOT drawing.
-      if (!this.isDrawing && rms < 0.03) {
+      // Continuously calibrate ambient RMS when NOT drawing. The brief pause
+      // after endStroke() keeps the tail of the utterance — residual room
+      // reverb, breath, throat settle — from being folded into the floor.
+      // Without it the floor drifts upward across a session and later strokes
+      // come out dottier than earlier ones.
+      const ambientReady =
+        performance.now() - this._endStrokeAt > AMBIENT_RESUME_MS;
+      if (!this.isDrawing && ambientReady && rms < 0.03) {
         this.ambientRMS = this.ambientRMS * 0.98 + rms * 0.02;
       }
 
