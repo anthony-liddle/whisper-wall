@@ -378,15 +378,31 @@
       this._lastRMS = rms;
       this._lastPitch = pitch;
 
-      // Continuously calibrate ambient RMS when NOT drawing. The brief pause
-      // after endStroke() keeps the tail of the utterance — residual room
-      // reverb, breath, throat settle — from being folded into the floor.
-      // Without it the floor drifts upward across a session and later strokes
-      // come out dottier than earlier ones.
+      // Continuously calibrate ambient RMS when NOT drawing.
+      //
+      // Two protections against floor drift, in order:
+      //   1. The post-endStroke pause keeps the tail of the user's own
+      //      utterance — room reverb, breath release, throat settle — out
+      //      of the floor measurement entirely.
+      //   2. The update itself is direction-asymmetric. The floor adapts
+      //      downward quickly (the room going quiet shows up immediately),
+      //      and upward very slowly (a single noisy moment, or the small
+      //      residuals that leak past the pause window after long
+      //      utterances, can't permanently raise the floor). Any sample
+      //      above the 0.03 cap is clamped, so even sustained loud input
+      //      cannot pull ambient past 0.03 — and the 0.001 upward rate
+      //      means even pulling there takes ~17 seconds of constant
+      //      non-stroke noise, which the pause + post-stroke quiet
+      //      generally prevents.
       const ambientReady =
         performance.now() - this._endStrokeAt > AMBIENT_RESUME_MS;
-      if (!this.isDrawing && ambientReady && rms < 0.03) {
-        this.ambientRMS = this.ambientRMS * 0.98 + rms * 0.02;
+      if (!this.isDrawing && ambientReady) {
+        const target = Math.min(rms, 0.03);
+        if (target < this.ambientRMS) {
+          this.ambientRMS = this.ambientRMS * 0.95 + target * 0.05;
+        } else {
+          this.ambientRMS = this.ambientRMS * 0.999 + target * 0.001;
+        }
       }
 
       // Voice presence: above ambient, OR a detected pitch, OR absolute RMS
