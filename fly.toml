@@ -1,0 +1,39 @@
+# fly.toml app configuration file generated for whisper-wall on 2026-05-21T15:13:22-07:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'whisper-wall'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  HOST = '0.0.0.0'
+  PORT = '8080'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Single warm machine. The wall lives in this process's memory, so the app
+  # MUST run exactly one machine: multiple machines = multiple isolated walls,
+  # and a refresh that load-balances to another machine shows an empty wall.
+  # Keep it from stopping on idle so the shared wall survives between visits
+  # (it still clears on deploy/restart — that ephemerality is by design).
+  # Pair this with `fly scale count 1` to remove any extra machines.
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'get'
+    path = '/healthz'
+
+[[vm]]
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 256
