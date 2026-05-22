@@ -60,6 +60,38 @@ fly scale count 1   # REQUIRED: run exactly one machine (see below)
 
 Fly serves the app at `https://<app-name>.fly.dev/wall.html`. HTTPS (and `wss://` for the WebSocket) is handled at the edge; the Node process speaks plain HTTP/WS internally. The Dockerfile builds a Node 22 image, installs production deps with pnpm, and runs `node server/index.js`.
 
+### Automatic Deployment On Merge
+
+Deploys happen automatically. A merge or push to `main` triggers the `deploy` GitHub Actions workflow (`.github/workflows/deploy.yml`), which runs the repo's verify check and then runs `fly deploy --remote-only`. You no longer need to deploy by hand.
+
+The check gates the deploy. If the HTML and JavaScript verification fails, the workflow stops and nothing is deployed.
+
+Each deploy clears the wall. The wall lives in one machine's memory, so every deploy restarts that process and starts the wall empty. This is expected and matches the piece's ephemerality. Docs-only commits (anything touching only `**.md` or `LICENSE`) are skipped so a README typo does not blank the wall. A commit that also changes code always deploys.
+
+One-Time Token Setup (Human Only):
+
+1. Create a Fly deploy token:
+
+   ```
+   fly tokens create deploy
+   ```
+
+2. Copy the full token value it prints (including the `FlyV1 ` prefix).
+3. In the GitHub repo, go to Settings, then Secrets and variables, then Actions, then New repository secret.
+4. Name the secret `FLY_API_TOKEN` and paste the token as the value, then save.
+
+The workflow reads the secret by name only. The token is never stored in the repo.
+
+Deploying Manually:
+
+You can still deploy by hand at any time as a fallback:
+
+```
+fly deploy
+```
+
+This is useful if GitHub Actions is unavailable, or to push a change without merging to `main`.
+
 ### Single machine is required
 
 The wall lives in **one process's memory**. There is no shared datastore. That means the app must run on **exactly one machine**:
