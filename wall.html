@@ -126,40 +126,11 @@
     white-space: pre;
   }
 
-  .toggles {
-    position: absolute;
-    top: 2.5rem;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 3;
-    display: flex;
-    gap: 2.2rem;
-    pointer-events: auto;
-  }
-  .toggle {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    font-size: 0.7rem;
-    letter-spacing: 0.25em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-    cursor: pointer;
-    user-select: none;
-    transition: color 0.3s ease;
-  }
-  .toggle:hover { color: var(--ink-soft); }
-  .toggle-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    border: 1px solid var(--ink-faint);
-    transition: background 0.3s ease, border-color 0.3s ease;
-  }
-  .toggle.on .toggle-dot {
-    background: var(--ink);
-    border-color: var(--ink);
-  }
+  /* Diagnostic chrome, shown only with ?dev=true. Both targets are
+     position:absolute, so toggling display reflows nothing — the wall a normal
+     visitor sees is pixel-identical to the dev view minus these overlays. */
+  .dev-only { display: none; }
+  body.dev .dev-only { display: block; }
 
   .gate {
     position: fixed;
@@ -228,25 +199,14 @@
 </div>
 
 <div class="ui title">Whisper Wall</div>
-<div class="ui meta">v0.1</div>
-
-<div class="toggles">
-  <div class="toggle" id="toggleOrnaments">
-    <span>Ornaments</span>
-    <span class="toggle-dot"></span>
-  </div>
-  <div class="toggle" id="toggleSmooth">
-    <span>Smooth Lines</span>
-    <span class="toggle-dot"></span>
-  </div>
-</div>
+<div class="ui meta dev-only">v0.1</div>
 
 <div class="ui hint" id="hint">
   Hold <kbd>space</kbd> and speak.
 </div>
 
 <div class="ui status" id="status">ready</div>
-<div class="debug" id="debug">strokes · 0
+<div class="debug dev-only" id="debug">strokes · 0
 rms     · —
 pitch   · —
 mic     · —</div>
@@ -338,13 +298,11 @@ const FULL_FADE = 1 + FADE_SMEAR;
 const MAX_STROKES = 30;
 
 // Densification — at wall scale, engine point spacing (~0.9px native, ~0.4px
-// screen) reads as discrete dots rather than a continuous line. When enabled,
-// we interpolate extra points at paint time so adjacent screen-space spacing
-// stays under DENSIFY_TARGET_PX. Beyond DENSIFY_MAX_GAP_PX we treat the gap
-// as intentional (splatters, dot-cluster flourishes, dot/mark separations)
-// and leave it alone so it doesn't get connected into a streak.
-// This is toggleable from the UI so we can compare both looks.
-let DENSIFY_STROKES = true;
+// screen) reads as discrete dots rather than a continuous line. We interpolate
+// extra points at paint time so adjacent screen-space spacing stays under
+// DENSIFY_TARGET_PX. Beyond DENSIFY_MAX_GAP_PX we treat the gap as intentional
+// (splatters, dot-cluster flourishes, dot/mark separations) and leave it alone
+// so it doesn't get connected into a streak.
 const DENSIFY_TARGET_PX = 1.2;
 const DENSIFY_MAX_GAP_PX = 4;
 
@@ -562,36 +520,17 @@ function bucketDensified(dense, xBase, yBase, fade) {
   }
 }
 
-// Accumulate raw points (no interpolation) into the buckets. offs may be null
-// (in-progress strokes, no fade).
-function bucketRaw(pts, offs, xBase, yBase, fade) {
-  for (let i = 0; i < pts.length; i++) {
-    const d = pts[i];
-    const off = offs ? offs[i] : 0;
-    const m = fade > 0 ? fadeMultiplier(fade, off) : 1;
-    if (m <= 0) continue;
-    const a = d.alpha * m;
-    if (a <= 0) continue;
-    bucketDot(xBase + d.x * scale, yBase + d.y * scale, Math.max(0.5, d.w * scale) / 2, a);
-  }
-}
-
 function addCompletedStroke(s) {
   if (s.fadeProgress >= FULL_FADE) return;
   const xBase = s.originXFrac != null ? s.originXFrac * viewW : originX;
-  if (DENSIFY_STROKES) {
-    // Lazily build/refresh the densified cache. A completed stroke's geometry
-    // never changes, so this runs once after commit and again only if scale
-    // changes (resize). The Smooth Lines toggle takes the raw branch below when
-    // off, leaving the cache intact for when it's turned back on.
-    if (!s.densified || s.densifiedScale !== scale) {
-      s.densified = buildDensified(s.points, s.fadeOffsets);
-      s.densifiedScale = scale;
-    }
-    bucketDensified(s.densified, xBase, s.currentY, s.fadeProgress);
-  } else {
-    bucketRaw(s.points, s.fadeOffsets, xBase, s.currentY, s.fadeProgress);
+  // Lazily build/refresh the densified cache. A completed stroke's geometry
+  // never changes, so this runs once after commit and again only if scale
+  // changes (resize).
+  if (!s.densified || s.densifiedScale !== scale) {
+    s.densified = buildDensified(s.points, s.fadeOffsets);
+    s.densifiedScale = scale;
   }
+  bucketDensified(s.densified, xBase, s.currentY, s.fadeProgress);
 }
 
 // In-progress strokes render in the writing slot (one line-height below the
@@ -599,11 +538,7 @@ function addCompletedStroke(s) {
 // but there are at most a handful of them so the cost is negligible.
 function addInProgressStroke(pts, offs, xBase) {
   const yBase = landingY + lineHeight;
-  if (DENSIFY_STROKES) {
-    bucketDensified(buildDensified(pts, offs), xBase, yBase, 0);
-  } else {
-    bucketRaw(pts, offs, xBase, yBase, 0);
-  }
+  bucketDensified(buildDensified(pts, offs), xBase, yBase, 0);
 }
 
 // ---------- Frame loop ----------
@@ -673,8 +608,7 @@ function frame() {
       for (const s of strokes) rawPts += s.points.length;
       console.log(
         `[perf] fps=${fps.toFixed(1)} renderMs=${meanRender.toFixed(2)} ` +
-          `strokes=${strokes.length} rawPts=${rawPts} dotsPerFrame=${meanDots} ` +
-          `densify=${DENSIFY_STROKES ? "on" : "off"}`,
+          `strokes=${strokes.length} rawPts=${rawPts} dotsPerFrame=${meanDots}`,
       );
       perfFrames = 0;
       perfRenderMsSum = 0;
@@ -730,19 +664,16 @@ window.addEventListener("keyup", (e) => {
   }
 });
 
-const toggleOrnaments = document.getElementById("toggleOrnaments");
-toggleOrnaments.addEventListener("click", () => {
-  const next = !engine.ornamentsEnabled;
-  engine.setOrnaments(next);
-  toggleOrnaments.classList.toggle("on", next);
-});
+// Ornaments are locked off for the live wall — every visual decision in the
+// piece was made on the ornaments-off rendering. Set explicitly to state intent
+// (this matches the engine default, but the call documents the choice).
+engine.setOrnaments(false);
 
-const toggleSmooth = document.getElementById("toggleSmooth");
-toggleSmooth.classList.toggle("on", DENSIFY_STROKES);
-toggleSmooth.addEventListener("click", () => {
-  DENSIFY_STROKES = !DENSIFY_STROKES;
-  toggleSmooth.classList.toggle("on", DENSIFY_STROKES);
-});
+// Diagnostic chrome (version, stats) is hidden by default and revealed only
+// with ?dev=true. Read once on load — no reactivity needed.
+if (new URLSearchParams(location.search).get("dev") === "true") {
+  document.body.classList.add("dev");
+}
 
 // ---------- Networking ----------
 // Streams local strokes out as they're drawn and renders remote strokes from
