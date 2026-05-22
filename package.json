@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "A shared web space where your voice becomes a single continuous pen stroke on a wall.",
   "scripts": {
-    "start": "npx serve ."
+    "start": "node server/index.js",
+    "serve-static": "npx serve ."
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
   }
 }

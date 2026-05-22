@@ -306,8 +306,17 @@ resize();
 // paint time the host scales by `scale` and offsets to currentY. The fade
 // offset is a per-point threshold — when global fade progress exceeds it,
 // that specific point starts dropping out, giving the chalk-wear look.
+//
+// Each stroke also carries originXFrac (and originYFrac, currently unused
+// for committed strokes since slot determines Y) so remote strokes drawn on
+// a different viewport land at the right relative horizontal position.
 const strokes = [];
 let active = null;
+
+// Remote strokes currently being drawn by other clients. Keyed by strokeId.
+// Render in the local writing slot at the sender's relative X origin. They
+// migrate into `strokes` on the corresponding stroke-end.
+const remoteActives = new Map();
 
 // Per-stroke debug log. Records ambient state, lift threshold, point count
 // and duration on commit so we can see whether the floor is drifting upward
@@ -340,13 +349,24 @@ const DENSIFY_TARGET_PX = 1.2;
 const DENSIFY_MAX_GAP_PX = 4;
 
 function beginStroke() {
-  active = { points: [], fadeOffsets: [] };
+  const strokeId = newStrokeId();
+  const originXFrac = originX / viewW;
+  const originYFrac = (landingY + lineHeight) / viewH;
+  active = {
+    strokeId,
+    points: [],
+    fadeOffsets: [],
+    originXFrac,
+    originYFrac,
+    sentCount: 0,
+  };
   // The active stroke is drawn in the writing slot (one line-height below
   // landing). originY is stored by the engine for caller reference only;
   // emitted points are in the engine's own (0,0)-relative frame regardless.
   engine.beginStroke({ originX: originX, originY: landingY + lineHeight });
   activeBeginAt = performance.now();
   status.textContent = "listening";
+  net.sendStrokeBegin(strokeId, originXFrac, originYFrac);
 }
 
 function commitActiveStroke() {
@@ -377,8 +397,11 @@ function commitActiveStroke() {
   // The shared SHIFT_EASE then carries it up by exactly one line-height in
   // lockstep with every other stroke moving up by the same amount.
   strokes.push({
+    strokeId: active.strokeId,
     points: active.points,
     fadeOffsets: active.fadeOffsets,
+    originXFrac: active.originXFrac,
+    originYFrac: active.originYFrac,
     slotIndex: 0,
     currentY: landingY + lineHeight,
     fadeProgress: 0,
@@ -387,23 +410,39 @@ function commitActiveStroke() {
   if (strokes.length > MAX_STROKES) strokes.shift();
 }
 
+// Commit a remote stroke when its stroke-end arrives. Same shift mechanics as
+// the local commit; difference is the origin comes from the remote sender.
+function commitRemoteStroke(remote) {
+  for (const s of strokes) s.slotIndex += 1;
+  strokes.push({
+    strokeId: remote.strokeId,
+    points: remote.points,
+    fadeOffsets: remote.fadeOffsets,
+    originXFrac: remote.originXFrac,
+    originYFrac: remote.originYFrac,
+    slotIndex: 0,
+    currentY: landingY + lineHeight,
+    fadeProgress: 0,
+  });
+  if (strokes.length > MAX_STROKES) strokes.shift();
+}
+
 function endStroke() {
   engine.endStroke();
+  const strokeId = active ? active.strokeId : null;
+  // Flush any straggler points before the end so the remote view shows the
+  // same final geometry as the local one.
+  if (active && active.sentCount < active.points.length) {
+    net.flushActivePoints(active);
+  }
   commitActiveStroke();
+  if (strokeId) net.sendStrokeEnd(strokeId);
   status.textContent = "ready";
 }
 
 // ---------- Render ----------
 function clearCanvas() {
   ctx.clearRect(0, 0, viewW, viewH);
-}
-
-function drawDot(x, y, w, alpha) {
-  if (alpha <= 0 || w <= 0) return;
-  ctx.beginPath();
-  ctx.fillStyle = `rgba(26, 22, 18, ${alpha})`;
-  ctx.arc(x, y, w / 2, 0, Math.PI * 2);
-  ctx.fill();
 }
 
 // Fade progress is a pure function of vertical position. As a stroke is
@@ -430,75 +469,153 @@ function fadeMultiplier(fade, off) {
   return 1;
 }
 
-function paintPoint(px, py, pw, alpha, yBase) {
-  if (alpha <= 0) return;
-  drawDot(
-    originX + px * scale,
-    yBase + py * scale,
-    Math.max(0.5, pw * scale),
-    alpha,
-  );
+// ---------- Bucketed ink rendering ----------
+// All ink is one colour (var(--ink)); only per-dot alpha varies. Drawing each
+// dot with its own ctx.fill() means ~14k fill() calls per frame on a full wall,
+// which is the dominant render cost (frame starvation). Instead we quantise
+// each dot's *current* alpha (engine weight × fade) into NUM_BUCKETS levels,
+// accumulate every dot into one Path2D per bucket, and fill each bucket once —
+// turning ~14k fills into NUM_BUCKETS fills per frame. The per-point fade still
+// works: a dot's bucket is chosen from its faded alpha *every frame*, so the
+// uneven chalk wearing-away is preserved, just rendered in NUM_BUCKETS steps.
+const NUM_BUCKETS = 8;
+const TWO_PI = Math.PI * 2;
+const inkBuckets = new Array(NUM_BUCKETS);
+const inkBucketStyles = new Array(NUM_BUCKETS);
+for (let b = 0; b < NUM_BUCKETS; b++) {
+  // Bucket b covers alpha [b/N, (b+1)/N); paint it at the bin midpoint.
+  inkBucketStyles[b] = `rgba(26, 22, 18, ${((b + 0.5) / NUM_BUCKETS).toFixed(4)})`;
 }
 
-// Walk a points array and paint each one, plus interpolated intermediates
-// when DENSIFY_STROKES is on. fadeOffsets may be null (active stroke), in
-// which case no fade is applied and intermediates inherit the average of
-// their neighbours' offsets only for completed-stroke purposes.
-function paintPointsArray(pts, offs, yBase, fade) {
-  const n = pts.length;
-  if (n === 0) return;
+let perfDotsThisFrame = 0; // counts actual dots accumulated per frame (perf probe)
 
-  // First point always rendered.
-  const off0 = offs ? offs[0] : 0;
-  const m0 = fade > 0 ? fadeMultiplier(fade, off0) : 1;
-  if (m0 > 0) paintPoint(pts[0].x, pts[0].y, pts[0].w, pts[0].alpha * m0, yBase);
+function resetBuckets() {
+  for (let b = 0; b < NUM_BUCKETS; b++) inkBuckets[b] = new Path2D();
+}
 
-  for (let i = 1; i < n; i++) {
-    const a = pts[i - 1];
-    const b = pts[i];
+// Accumulate one dot (screen coords) into its alpha bucket. moveTo before arc
+// avoids a connecting line from the previous subpath.
+function bucketDot(sx, sy, r, alpha) {
+  if (alpha <= 0 || r <= 0) return;
+  let b = (alpha * NUM_BUCKETS) | 0; // floor
+  if (b >= NUM_BUCKETS) b = NUM_BUCKETS - 1;
+  else if (b < 0) return;
+  const p = inkBuckets[b];
+  p.moveTo(sx + r, sy);
+  p.arc(sx, sy, r, 0, TWO_PI);
+  if (PERF_LOG) perfDotsThisFrame += 1;
+}
 
-    if (DENSIFY_STROKES) {
-      const dxScreen = (b.x - a.x) * scale;
-      const dyScreen = (b.y - a.y) * scale;
-      const distScreen = Math.sqrt(dxScreen * dxScreen + dyScreen * dyScreen);
-      if (distScreen > DENSIFY_TARGET_PX && distScreen <= DENSIFY_MAX_GAP_PX) {
-        const steps = Math.ceil(distScreen / DENSIFY_TARGET_PX);
-        const offMid = offs ? (offs[i - 1] + offs[i]) / 2 : 0;
-        const midMult = fade > 0 ? fadeMultiplier(fade, offMid) : 1;
-        if (midMult > 0) {
-          for (let k = 1; k < steps; k++) {
-            const t = k / steps;
-            const ix = a.x + (b.x - a.x) * t;
-            const iy = a.y + (b.y - a.y) * t;
-            const iw = a.w + (b.w - a.w) * t;
-            const ialpha = a.alpha + (b.alpha - a.alpha) * t;
-            paintPoint(ix, iy, iw, ialpha * midMult, yBase);
-          }
-        }
-      }
-    }
-
-    const offB = offs ? offs[i] : 0;
-    const mB = fade > 0 ? fadeMultiplier(fade, offB) : 1;
-    if (mB > 0) paintPoint(b.x, b.y, b.w, b.alpha * mB, yBase);
+// Fill each bucket once, faintest first so heavier ink layers on top.
+function flushBuckets() {
+  for (let b = 0; b < NUM_BUCKETS; b++) {
+    ctx.fillStyle = inkBucketStyles[b];
+    ctx.fill(inkBuckets[b]);
   }
 }
 
-function renderStroke(s) {
-  if (s.fadeProgress >= FULL_FADE) return;
-  paintPointsArray(s.points, s.fadeOffsets, s.currentY, s.fadeProgress);
+// Build a stroke's densified point list once. Output is in engine-native
+// coordinates (scale applied at paint), but the *decision* of where to insert
+// interpolated points depends on screen distance, hence on `scale` — so the
+// cache is keyed on the scale it was built at and rebuilt on resize.
+// Each entry carries its own fade offset so per-point chalk-wear still applies.
+function buildDensified(points, fadeOffsets) {
+  const out = [];
+  const n = points.length;
+  if (n === 0) return out;
+  out.push({ x: points[0].x, y: points[0].y, w: points[0].w, alpha: points[0].alpha, off: fadeOffsets[0] });
+  for (let i = 1; i < n; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const dxScreen = (b.x - a.x) * scale;
+    const dyScreen = (b.y - a.y) * scale;
+    const distScreen = Math.sqrt(dxScreen * dxScreen + dyScreen * dyScreen);
+    if (distScreen > DENSIFY_TARGET_PX && distScreen <= DENSIFY_MAX_GAP_PX) {
+      const steps = Math.ceil(distScreen / DENSIFY_TARGET_PX);
+      const offMid = (fadeOffsets[i - 1] + fadeOffsets[i]) / 2;
+      for (let k = 1; k < steps; k++) {
+        const t = k / steps;
+        out.push({
+          x: a.x + (b.x - a.x) * t,
+          y: a.y + (b.y - a.y) * t,
+          w: a.w + (b.w - a.w) * t,
+          alpha: a.alpha + (b.alpha - a.alpha) * t,
+          off: offMid,
+        });
+      }
+    }
+    out.push({ x: b.x, y: b.y, w: b.w, alpha: b.alpha, off: fadeOffsets[i] });
+  }
+  return out;
 }
 
-function renderActive() {
-  if (!active) return;
-  // Active stroke renders in the writing slot — one line-height below the
-  // landing position, so the user always has clear space below the wall to
-  // draw into. On commit, it eases up by exactly one line-height while the
-  // rest of the wall does the same; everyone moves in lockstep.
-  paintPointsArray(active.points, null, landingY + lineHeight, 0);
+// Accumulate a densified array (entries carry their own .off) into the buckets,
+// applying the per-point fade multiplier.
+function bucketDensified(dense, xBase, yBase, fade) {
+  for (let i = 0; i < dense.length; i++) {
+    const d = dense[i];
+    const m = fade > 0 ? fadeMultiplier(fade, d.off) : 1;
+    if (m <= 0) continue;
+    const a = d.alpha * m;
+    if (a <= 0) continue;
+    bucketDot(xBase + d.x * scale, yBase + d.y * scale, Math.max(0.5, d.w * scale) / 2, a);
+  }
+}
+
+// Accumulate raw points (no interpolation) into the buckets. offs may be null
+// (in-progress strokes, no fade).
+function bucketRaw(pts, offs, xBase, yBase, fade) {
+  for (let i = 0; i < pts.length; i++) {
+    const d = pts[i];
+    const off = offs ? offs[i] : 0;
+    const m = fade > 0 ? fadeMultiplier(fade, off) : 1;
+    if (m <= 0) continue;
+    const a = d.alpha * m;
+    if (a <= 0) continue;
+    bucketDot(xBase + d.x * scale, yBase + d.y * scale, Math.max(0.5, d.w * scale) / 2, a);
+  }
+}
+
+function addCompletedStroke(s) {
+  if (s.fadeProgress >= FULL_FADE) return;
+  const xBase = s.originXFrac != null ? s.originXFrac * viewW : originX;
+  if (DENSIFY_STROKES) {
+    // Lazily build/refresh the densified cache. A completed stroke's geometry
+    // never changes, so this runs once after commit and again only if scale
+    // changes (resize). The Smooth Lines toggle takes the raw branch below when
+    // off, leaving the cache intact for when it's turned back on.
+    if (!s.densified || s.densifiedScale !== scale) {
+      s.densified = buildDensified(s.points, s.fadeOffsets);
+      s.densifiedScale = scale;
+    }
+    bucketDensified(s.densified, xBase, s.currentY, s.fadeProgress);
+  } else {
+    bucketRaw(s.points, s.fadeOffsets, xBase, s.currentY, s.fadeProgress);
+  }
+}
+
+// In-progress strokes render in the writing slot (one line-height below the
+// landing position) with no fade. They densify live since points still arrive,
+// but there are at most a handful of them so the cost is negligible.
+function addInProgressStroke(pts, offs, xBase) {
+  const yBase = landingY + lineHeight;
+  if (DENSIFY_STROKES) {
+    bucketDensified(buildDensified(pts, offs), xBase, yBase, 0);
+  } else {
+    bucketRaw(pts, offs, xBase, yBase, 0);
+  }
 }
 
 // ---------- Frame loop ----------
+// Temporary perf instrumentation for the frame-starvation investigation.
+// Logs rolling FPS, mean render time (ms spent in the render section), dots
+// drawn per frame, and stroke count once per second. Flip to true to measure.
+const PERF_LOG = false;
+let perfFrames = 0;
+let perfRenderMsSum = 0;
+let perfDotsSum = 0;
+let perfWindowStart = performance.now();
+
 function frame() {
   // Engine ticks every frame so ambient calibration runs even when idle.
   const newPoints = engine.tick();
@@ -508,6 +625,12 @@ function frame() {
       active.points.push(p);
       active.fadeOffsets.push(Math.random());
     }
+  }
+
+  // Batch newly-emitted points and send once per frame. Sending per-point
+  // would overwhelm the socket; per-frame matches the engine's emit cadence.
+  if (active && active.sentCount < active.points.length) {
+    net.flushActivePoints(active);
   }
 
   // Advance completed strokes toward their target positions and compute fade.
@@ -521,12 +644,44 @@ function frame() {
     }
   }
 
-  // Naive: clear and repaint every frame. With ~20 strokes of a few hundred
-  // points each, this stays comfortably under 16ms on a modern machine.
-  // Revisit (offscreen cache per stroke) only if a real performance need shows.
+  // Clear and repaint every frame. All ink is accumulated into NUM_BUCKETS
+  // Path2D buckets (one per quantised alpha level) and each bucket filled once,
+  // so the number of fill() calls is fixed regardless of how full the wall is.
+  perfDotsThisFrame = 0;
+  const renderStart = performance.now();
   clearCanvas();
-  for (const s of strokes) renderStroke(s);
-  renderActive();
+  resetBuckets();
+  for (const s of strokes) addCompletedStroke(s);
+  // In-progress strokes (local + remote) render live in the writing slot.
+  if (active) addInProgressStroke(active.points, active.fadeOffsets, originX);
+  for (const r of remoteActives.values()) {
+    addInProgressStroke(r.points, r.fadeOffsets, r.originXFrac * viewW);
+  }
+  flushBuckets();
+  const renderMs = performance.now() - renderStart;
+
+  if (PERF_LOG) {
+    perfFrames += 1;
+    perfRenderMsSum += renderMs;
+    perfDotsSum += perfDotsThisFrame;
+    const elapsed = performance.now() - perfWindowStart;
+    if (elapsed >= 1000) {
+      const fps = (perfFrames / elapsed) * 1000;
+      const meanRender = perfRenderMsSum / perfFrames;
+      const meanDots = Math.round(perfDotsSum / perfFrames);
+      let rawPts = 0;
+      for (const s of strokes) rawPts += s.points.length;
+      console.log(
+        `[perf] fps=${fps.toFixed(1)} renderMs=${meanRender.toFixed(2)} ` +
+          `strokes=${strokes.length} rawPts=${rawPts} dotsPerFrame=${meanDots} ` +
+          `densify=${DENSIFY_STROKES ? "on" : "off"}`,
+      );
+      perfFrames = 0;
+      perfRenderMsSum = 0;
+      perfDotsSum = 0;
+      perfWindowStart = performance.now();
+    }
+  }
 
   // Viewport auto-end: matches the demo's right-edge stop, scaled.
   if (active) {
@@ -589,6 +744,186 @@ toggleSmooth.addEventListener("click", () => {
   toggleSmooth.classList.toggle("on", DENSIFY_STROKES);
 });
 
+// ---------- Networking ----------
+// Streams local strokes out as they're drawn and renders remote strokes from
+// other connected clients. No audio ever crosses the socket — only geometry.
+// The wire protocol is documented in server/protocol.js.
+function newStrokeId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+const net = (() => {
+  let ws = null;
+  let clientId = null;
+  let backoffMs = 500;
+  const MAX_BACKOFF = 8000;
+
+  function url() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${location.host}/`;
+  }
+
+  function connect() {
+    try {
+      ws = new WebSocket(url());
+    } catch (e) {
+      scheduleReconnect();
+      return;
+    }
+    ws.addEventListener("open", () => {
+      backoffMs = 500;
+    });
+    ws.addEventListener("message", (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      handleMessage(msg);
+    });
+    ws.addEventListener("close", () => {
+      ws = null;
+      scheduleReconnect();
+    });
+    ws.addEventListener("error", () => {
+      // close will follow
+    });
+  }
+  function scheduleReconnect() {
+    setTimeout(connect, backoffMs);
+    backoffMs = Math.min(MAX_BACKOFF, backoffMs * 2);
+  }
+
+  function send(obj) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try { ws.send(JSON.stringify(obj)); } catch {}
+  }
+
+  function handleMessage(msg) {
+    if (!msg || typeof msg !== "object") return;
+    if (msg.type === "hello") {
+      clientId = msg.clientId;
+      return;
+    }
+    if (msg.type === "wall-state") {
+      console.log(
+        `[net] wall-state received: ${(msg.strokes || []).length} strokes ` +
+          `(${(msg.strokes || []).filter((s) => s.complete).length} complete)`,
+      );
+      applyWallState(msg.strokes || []);
+      return;
+    }
+    if (msg.type === "stroke-begin") {
+      if (msg.clientId && msg.clientId === clientId) return;
+      remoteActives.set(msg.strokeId, {
+        strokeId: msg.strokeId,
+        originXFrac: msg.originXFrac,
+        originYFrac: msg.originYFrac,
+        points: [],
+        fadeOffsets: [],
+      });
+      return;
+    }
+    if (msg.type === "stroke-points") {
+      const r = remoteActives.get(msg.strokeId);
+      if (!r) return;
+      for (const p of msg.points) {
+        r.points.push({ x: p.x, y: p.y, w: p.w, alpha: p.alpha });
+        r.fadeOffsets.push(typeof p.fadeOffset === "number" ? p.fadeOffset : Math.random());
+      }
+      return;
+    }
+    if (msg.type === "stroke-end") {
+      const r = remoteActives.get(msg.strokeId);
+      if (!r) return;
+      remoteActives.delete(msg.strokeId);
+      if (r.points.length > 0) commitRemoteStroke(r);
+      return;
+    }
+    if (msg.type === "stroke-abort") {
+      // The drawer disconnected mid-stroke. Drop the partial without
+      // committing — matches the server, which also drops it. An interrupted
+      // utterance leaves no permanent mark.
+      remoteActives.delete(msg.strokeId);
+      return;
+    }
+  }
+
+  function applyWallState(remoteStrokes) {
+    // Replace local committed strokes with the server's view. Stack ordering:
+    // last item in the array is newest (slot 0), earlier items step upward.
+    strokes.length = 0;
+    remoteActives.clear();
+    const completed = remoteStrokes.filter((s) => s.complete);
+    const inFlight = remoteStrokes.filter((s) => !s.complete);
+    const n = completed.length;
+    for (let i = 0; i < n; i++) {
+      const s = completed[i];
+      const slotIndex = n - 1 - i;
+      const targetY = landingY - slotIndex * lineHeight;
+      const fadeOffsets = (s.points || []).map((p) =>
+        typeof p.fadeOffset === "number" ? p.fadeOffset : Math.random(),
+      );
+      const points = (s.points || []).map((p) => ({
+        x: p.x, y: p.y, w: p.w, alpha: p.alpha,
+      }));
+      strokes.push({
+        strokeId: s.strokeId,
+        points,
+        fadeOffsets,
+        originXFrac: s.originXFrac,
+        originYFrac: s.originYFrac,
+        slotIndex,
+        currentY: targetY,
+        fadeProgress: 0,
+      });
+    }
+    for (const s of inFlight) {
+      // Don't render an in-flight stroke that we ourselves originated.
+      if (s.clientId && s.clientId === clientId) continue;
+      remoteActives.set(s.strokeId, {
+        strokeId: s.strokeId,
+        originXFrac: s.originXFrac,
+        originYFrac: s.originYFrac,
+        points: (s.points || []).map((p) => ({
+          x: p.x, y: p.y, w: p.w, alpha: p.alpha,
+        })),
+        fadeOffsets: (s.points || []).map((p) =>
+          typeof p.fadeOffset === "number" ? p.fadeOffset : Math.random(),
+        ),
+      });
+    }
+  }
+
+  return {
+    sendStrokeBegin(strokeId, originXFrac, originYFrac) {
+      send({ type: "stroke-begin", strokeId, originXFrac, originYFrac });
+    },
+    sendStrokeEnd(strokeId) {
+      send({ type: "stroke-end", strokeId });
+    },
+    flushActivePoints(activeStroke) {
+      const start = activeStroke.sentCount;
+      const end = activeStroke.points.length;
+      if (end <= start) return;
+      const slice = [];
+      for (let i = start; i < end; i++) {
+        const p = activeStroke.points[i];
+        slice.push({
+          x: p.x, y: p.y, w: p.w, alpha: p.alpha,
+          fadeOffset: activeStroke.fadeOffsets[i],
+        });
+      }
+      activeStroke.sentCount = end;
+      send({ type: "stroke-points", strokeId: activeStroke.strokeId, points: slice });
+    },
+    start: connect,
+  };
+})();
+
+net.start();
+// Start the render loop before mic init so remote strokes are visible while
+// the user is still on the gate. engine.tick() returns [] without an analyser.
+requestAnimationFrame(frame);
+
 enterBtn.addEventListener("click", async () => {
   enterBtn.disabled = true;
   enterBtn.textContent = "Listening...";
@@ -604,7 +939,8 @@ enterBtn.addEventListener("click", async () => {
     await engine.start(audioCtx, micStream);
     gate.classList.add("hidden");
     setTimeout(() => (gate.style.display = "none"), 800);
-    frame();
+    // Frame loop is already running (started above so remote strokes show
+    // before the user has granted the mic).
   } catch (err) {
     enterBtn.textContent = "Microphone needed";
     console.error(err);
