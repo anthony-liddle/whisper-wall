@@ -14,6 +14,8 @@ RUN pnpm install --prod --frozen-lockfile || pnpm install --prod
 # Copy server code and the static client assets that the server serves.
 COPY server ./server
 COPY engine.js wall.html demo.html ./
+# Preview/icon assets served from the root (see server/static.js allowlist).
+COPY og-image.png favicon.svg favicon-32.png apple-touch-icon.png ./
 COPY prototype ./prototype
 
 ENV NODE_ENV=production
