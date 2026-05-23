@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- Paper is part of the identity: the icon carries the wall's background, not
+       transparency, so it never sits oddly on light or dark browser chrome. -->
+  <rect width="32" height="32" fill="#f4ede0"/>
+  <!-- A single quiet Whisper Wall gesture: a flat line with one rise and one
+       deeper dip. Deliberately simpler than the captured stroke so it stays
+       legible at 16px. Round caps/joins and a heavier stroke survive downscale. -->
+  <path d="M3 16 L10.5 16 C12 16 12.6 7.5 14.6 7.5 C16.6 7.5 17 25 19 25 C20.6 25 21.2 16 23 16 L29 16"
+        fill="none" stroke="#1a1612" stroke-width="2.6"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

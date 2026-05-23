@@ -33,6 +33,10 @@ const ALLOW = new Set([
   '/engine.js',
   '/prototype/prototype.html',
   '/favicon.ico',
+  '/favicon.svg',
+  '/favicon-32.png',
+  '/apple-touch-icon.png',
+  '/og-image.png',
 ]);
 
 function serve(req, res) {
