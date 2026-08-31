@@ -890,7 +890,7 @@ enterBtn.addEventListener("click", async () => {
       audio: {
         echoCancellation: false,
         noiseSuppression: false,
-        autoGainControl: true,
+        autoGainControl: false,
       },
     });
     await engine.start(audioCtx, micStream);
